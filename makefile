@@ -13,11 +13,11 @@ LDLIBS=
 main: main.o
 	g++ $(LDFLAGS) -o main main.o $(LDLIBS)
 
-main.o: main.cpp test_sockets.cpp types.cpp
+main.o: main.cpp test_sockets.cpp socket_types.cpp socket_helpers.cpp
 	g++ $(CPPFLAGS) -c main.cpp
 
 server_http: server_http.o
 	g++ $(LDFLAGS) -o server_http server_http.o $(LDLIBS)
 
-server_http.o: server_http.cpp types.cpp
+server_http.o: server_http.cpp socket_types.cpp socket_helpers.cpp
 	g++ $(CPPFLAGS) -c server_http.cpp

@@ -1,10 +1,12 @@
-# include "./types.cpp"
+#include "./socket_types.cpp"
+#include "./socket_helpers.cpp"
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <sys/socket.h>
 #include <thread>
 
 using string = std::string;
@@ -23,6 +25,7 @@ string get_address_string(sockaddr& addr, socklen_t& addrlen) {
 // listen for and accept connections
 // ------------------------------------------------------------
 
+
 struct accept_connection_struct {
 	int			sockfd;
 	sockaddr	addr;
@@ -37,10 +40,52 @@ void accept_connection(accept_connection_struct connection_info) {
 	printf("\tsockfd: %i\n", sockfd);
 	printf("\tipaddr: %s\n", ipstr.c_str());
 
-	// ...
+	// echo.
+	std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+
+	int status;
+	int msg_length = recv_int(sockfd, &status);
+	printf("message length: %i\n", msg_length);
+
+	const int BUF_SZ = 6;
+	char buf[BUF_SZ + 1];
+	int x = 0;// current read position in message.
+	while(x < msg_length) {
+		// receive message chunk.
+		int recv_len_max = std::min(BUF_SZ, msg_length - x);
+		int recv_len = recv_all(sockfd, buf, recv_len_max, &status);
+		if(status == 0) {
+			printf("recv - connection closed\n");
+			exit(0);
+		}
+		if(status <  0) {
+			printf("recv - error occurred: %i\n", status);
+			exit(1);
+		}
+		x += recv_len;
+
+		// print message data.
+		buf[recv_len] = 0;// terminate string with 0 for printing.
+		printf("%s\n", buf);
+		std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+		// send message chunk back.
+		int send_len_max = recv_len;
+		int send_len = send_all(sockfd, buf, send_len_max, &status);
+		if(status == 0) {
+			printf("send - connection closed\n");
+			exit(0);
+		}
+		if(status <  0) {
+			printf("send - error occurred: %i\n", status);
+			exit(1);
+		}
+	}
+	printf("\n");
+
+	std::this_thread::sleep_for(std::chrono::milliseconds(2000));
 
 	// exit thread.
-	std::this_thread::sleep_for(std::chrono::milliseconds(3000));
 	printf("worker thread finished\n");
 }
 

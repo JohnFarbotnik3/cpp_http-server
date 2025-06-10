@@ -1,4 +1,5 @@
-# include "./types.cpp"
+#include "./socket_types.cpp"
+#include "./socket_helpers.cpp"
 #include <cerrno>
 #include <cstddef>
 #include <cstdio>
@@ -136,6 +137,23 @@ void test_socket_connect_or_listen(bool is_server) {
 			exit(1);
 		}
 		printf("connected to destination\n");
+		// send message.
+		char buf[1024];
+		std::string msg = "test message abc 123 :)";
+		sprintf(buf, "%s", msg.c_str());
+		int msg_length = msg.length();
+		printf("sending length: %i\n", msg_length);
+		send_int(sockfd, &status, msg_length);
+		printf("sending message: %s\n", buf);
+		send(sockfd, buf, msg_length, 0);
+		// receive response.
+		printf("receiving message.\n");
+		char buf2[1024];
+		recv_all(sockfd, buf2, msg_length, &status);
+		buf2[msg.length()] = 0;
+		printf("response:\n");
+		printf("%s", buf2);
+		printf("\n");
 	}
 
 	// bind socket to address+port, then listen for connections.
