@@ -154,6 +154,8 @@ void test_socket_connect_or_listen(bool is_server) {
 		printf("response:\n");
 		printf("%s", buf2);
 		printf("\n");
+		// close socket.
+		close(sockfd);
 	}
 
 	// bind socket to address+port, then listen for connections.

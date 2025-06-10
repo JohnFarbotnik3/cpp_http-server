@@ -8,20 +8,23 @@
 /*
 returns number of bytes sent.
 
-status == 1: message was send successfully.
+status == 1: message was sent successfully.
 status == 0: connection closed.
 status <  0: an error occurred.
+
+if an error occurred, errno will be set.
+
+see "send" manpage for more info.
 */
-int send_all(int fd, void* buf, int n, int* status, int flags=0) {
-	int x=0;
-	while(x < n) {
-		int len = send(fd, (char*)buf+x, n-x, flags);
-		if(len <= 0) {
-			*status = len;
-			break;
-		} else {
-			x += len;
+int send_all(int fd, void* msg, int len, int* status, int flags=0) {
+	int x = 0;
+	while(x < len) {
+		int num_sent = send(fd, (char*)msg+x, len-x, flags);
+		if(num_sent <= 0) {
+			*status = num_sent;
+			return x;
 		}
+		x += num_sent;
 	}
 	*status = 1;
 	return x;
@@ -30,20 +33,23 @@ int send_all(int fd, void* buf, int n, int* status, int flags=0) {
 /*
 returns number of bytes received.
 
-status == 1: message was send successfully.
+status == 1: message was sent successfully.
 status == 0: connection closed.
 status <  0: an error occurred.
+
+if an error occurred, errno will be set.
+
+see "recv" manpage for more info.
 */
-int recv_all(int fd, void* buf, int n, int* status, int flags=0) {
-	int x=0;
-	while(x < n) {
-		int len = recv(fd, (char*)buf+x, n-x, flags);
-		if(len <= 0) {
-			*status = len;
-			break;
-		} else {
-			x += len;
+int recv_all(int fd, void* msg, int len, int* status, int flags=0) {
+	int x = 0;
+	while(x < len) {
+		int num_recv = recv(fd, (char*)msg+x, len-x, flags);
+		if(num_recv <= 0) {
+			*status = num_recv;
+			return x;
 		}
+		x += num_recv;
 	}
 	*status = 1;
 	return x;

@@ -1,11 +1,13 @@
 #include "./socket_types.cpp"
 #include "./socket_helpers.cpp"
+#include "./serialization.cpp"
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <sys/socket.h>
 #include <thread>
 
@@ -59,7 +61,7 @@ void accept_connection(accept_connection_struct connection_info) {
 			exit(0);
 		}
 		if(status <  0) {
-			printf("recv - error occurred: %i\n", status);
+			printf("recv - error occurred: %i\n", errno);
 			exit(1);
 		}
 		x += recv_len;
@@ -74,10 +76,12 @@ void accept_connection(accept_connection_struct connection_info) {
 		int send_len = send_all(sockfd, buf, send_len_max, &status);
 		if(status == 0) {
 			printf("send - connection closed\n");
+			close(sockfd);
 			exit(0);
 		}
 		if(status <  0) {
-			printf("send - error occurred: %i\n", status);
+			printf("send - error occurred: %i\n", errno);
+			close(sockfd);
 			exit(1);
 		}
 	}
@@ -86,6 +90,9 @@ void accept_connection(accept_connection_struct connection_info) {
 	std::this_thread::sleep_for(std::chrono::milliseconds(2000));
 
 	// exit thread.
+	// TODO: figure out how to add an generic exit function to threads
+	// to clean up socket-fd. (instead of needing to do this at every exit)
+	close(sockfd);
 	printf("worker thread finished\n");
 }
 
@@ -148,6 +155,8 @@ void listen_for_connections(const char* portname) {
 // ------------------------------------------------------------
 
 int main(const int argc, const char** argv) {
+	serialization::test();
+
 	if(argc <= 1) printf("missing arg[1]: portname (string)\n");
 	if(argc <= 1) exit(1);
 	const char* portname = argv[1];
