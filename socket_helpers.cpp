@@ -1,8 +1,9 @@
 #include <netinet/in.h>
+#include <string>
 #include <sys/socket.h>
 
 // ============================================================
-// send and receive functions.
+// send and receive functions - tcp.
 // ------------------------------------------------------------
 
 /*
@@ -65,6 +66,7 @@ int recv_int(int fd, int* status) {
 	recv_all(fd, &net_value, sizeof(net_value), status);
 	return ntohl(net_value);
 }
+
 
 
 

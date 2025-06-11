@@ -14,24 +14,35 @@
 
 	in particular, these functions need to be easy to re-write in javascript.
 
+	NOTE: when used for same device communication (ex. a local compute server),
+	memcpy of u32 and f64 values is (probably) sufficient for c++ <-> javascript.
+
 	NOTE: for better performance, compiling these functions to webassembly
 	is also an option, however I'm not entirely sure if network-to-host style
-	conversions will behave well (different versions may have to be compiled).
+	conversions will behave consistently across devices. (look into this!)
 */
 namespace serialization {
 
-	struct Serializer {
+	/*
+		A buffer for reading or writing data.
+
+		WARNING: make sure to reserve enough space before reading/writing.
+
+		WARNING: position advances on both reads and writes,
+		so be careful when mixing the two.
+	*/
+	struct buffer_rw {
 		char* data;
 		int capacity;
 		int position;
 
-		Serializer(int capacity=64) {
+		buffer_rw(int capacity=64) {
 			this->data = new char[capacity];
 			this->capacity = capacity;
 			this->position = 0;
 		}
 
-		~Serializer() {
+		~buffer_rw() {
 			delete[] this->data;
 		}
 
@@ -50,11 +61,14 @@ namespace serialization {
 			position = 0;
 		}
 
-		// return pointer to current position in data, then advance.
-		char* advance(size_t n) {
-			char* ptr = data + position;
+		// return pointer to current position in data.
+		char* position_ptr() {
+			return data + position;
+		}
+
+		// advance write position.
+		void advance(size_t n) {
 			position += n;
-			return ptr;
 		}
 
 		void write(char c) {
@@ -75,28 +89,30 @@ namespace serialization {
 	};
 
 
-	void		encode_u32(Serializer& buf, uint32_t value) {
+	void		encode_u32(buffer_rw& buf, uint32_t value) {
 		buf.reserve(4);
-		uint8_t* ptr = (uint8_t*) buf.advance(4);
+		uint8_t* ptr = (uint8_t*) buf.position_ptr();
 		ptr[0] = (value >> 8*0) & 0xff;
 		ptr[1] = (value >> 8*1) & 0xff;
 		ptr[2] = (value >> 8*2) & 0xff;
 		ptr[3] = (value >> 8*3) & 0xff;
+		buf.advance(4);
 	}
-	uint32_t	decode_u32(Serializer& buf) {
-		uint8_t* ptr = (uint8_t*) buf.advance(4);
+	uint32_t	decode_u32(buffer_rw& buf) {
+		uint8_t* ptr = (uint8_t*) buf.position_ptr();
 		uint32_t value = (
 			(ptr[0] << 8*0) |
 			(ptr[1] << 8*1) |
 			(ptr[2] << 8*2) |
 			(ptr[3] << 8*3)
 		);
+		buf.advance(4);
 		return value;
 	}
 
 
 	template<typename T>
-	void	encode_fp(Serializer& buf, T value) {
+	void	encode_fp(buffer_rw& buf, T value) {
 		std::array<char, 64> str;
 		auto [ptr, ec] = std::to_chars(str.data(), str.data() + str.size(), value);
 		if (ec == std::errc()) {
@@ -109,33 +125,34 @@ namespace serialization {
 		}
 	}
 	template<typename T>
-	T	decode_fp(Serializer& buf) {
+	T	decode_fp(buffer_rw& buf) {
 		uint8_t len = buf.read();
-		char* str = buf.advance(len);
 		T value;
+		char* str = buf.position_ptr();
 		std::from_chars(str, str + len, value);
+		buf.advance(len);
 		return value;
 	}
-	void	encode_f32(Serializer& buf, float value) {
+	void	encode_f32(buffer_rw& buf, float value) {
 		return encode_fp<float>(buf, value);
 	}
-	void	encode_f64(Serializer& buf, double value) {
+	void	encode_f64(buffer_rw& buf, double value) {
 		return encode_fp<double>(buf, value);
 	}
-	float	decode_f32(Serializer& buf) {
+	float	decode_f32(buffer_rw& buf) {
 		return decode_fp<float>(buf);
 	}
-	double	decode_f64(Serializer& buf) {
+	double	decode_f64(buffer_rw& buf) {
 		return decode_fp<double>(buf);
 	}
 
 
-	void		encode_string(Serializer& buf, const std::string& str) {
+	void		encode_string(buffer_rw& buf, const std::string& str) {
 		buf.reserve(str.length() + 4);
 		encode_u32(buf, str.length());
 		buf.write(str.data(), str.length());
 	}
-	std::string	decode_string(Serializer& buf) {
+	std::string	decode_string(buffer_rw& buf) {
 		int length = decode_u32(buf);
 		std::string str;
 		str.resize(length);
@@ -154,7 +171,7 @@ namespace serialization {
 		printf("in f64: %.20f\n", f64_in);
 		printf("in str: %s\n", str_in.c_str());
 
-		Serializer buf(32);
+		buffer_rw buf(32);
 		encode_u32(buf, u32_in);
 		encode_f32(buf, f32_in);
 		encode_f64(buf, f64_in);
