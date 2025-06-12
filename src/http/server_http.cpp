@@ -9,6 +9,9 @@ https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Messages
 #include "../tcp/server_tcp.cpp"
 #include "./definitions/headers.cpp"
 #include "./definitions/status_codes.cpp"
+#include "./definitions/content_types.cpp"
+#include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <map>
 #include <string>
@@ -53,9 +56,10 @@ namespace HTTP {
 		string		protocol;
 		// headers.
 		header_dict	headers;
-		// content - NOTE: this points to an associated buffer.
-		char*		content_beg;
-		char*		content_end;
+		// content.
+		std::string_view content() const {
+			return std::string_view(buffer.data() + head_length, body_length);
+		}
 	};
 
 	struct http_response {
@@ -210,14 +214,14 @@ namespace HTTP {
 		// NOTE: "content-type" header will still have to be set externally.
 		if(buffer_body.length() > 0) {
 			char temp[256];
-			sprintf(temp, "%lu", buffer_body.length());
+			snprintf(temp, 256, "%lu", buffer_body.length());
 			response.headers[HTTP::HEADERS::content_length] = string(temp);
 		}
 
 		// build start line.
 		{
 			char temp[256];
-			sprintf(temp, "%s %i %s", response.protocol.c_str(), response.status.code, response.status.text.c_str());
+			snprintf(temp, 256, "%s %i %s", response.protocol.c_str(), response.status.code, response.status.text.c_str());
 			buffer_head.append(string(temp));
 			buffer_head.append(HTTP_HEADER_NEWLINE);
 		}
@@ -272,6 +276,7 @@ namespace HTTP {
 			}
 		}
 
+		// send 0 bytes to convince browser to behave normally.
 		error = ERROR_STATUS::SUCCESS;
 	}
 
@@ -286,34 +291,100 @@ namespace HTTP {
 			printf("\tsockfd: %i\n", fd);
 			printf("\tipaddr: %s\n", ipstr.c_str());
 
-			// receive request.
+			// perform request-response cycle until user closes socket.
+			// TODO: automatically close after N seconds of no traffic, or after T total seconds.
+			// TODO: figure out why putting req-res cycle in a while loop doesn't work.
+
+			// get request.
 			ERROR_STATUS::error_status err;
 			http_request request = recv_http(fd, err);
-
-			if(err.code == ERROR_STATUS::SUCCESS.code) {
-				// print parsed http data.
-				std::vector<string> list;
-				list.push_back(request.method);
-				list.push_back(request.target);
-				list.push_back(request.protocol);
-				printf("START OF REQUEST\n");
-				for(const string  str : list) printf("%s\n", str.c_str());
-				printf("REQUEST HEADERS\n");
-				for(const auto& [key,val] : request.headers) printf("%s: %s\n", key.c_str(), val.c_str());
-				printf("REQUEST BUFFER\n");
-				printf("%s\n", request.buffer.c_str());
-				printf("END OF REQUEST\n");
-
-				// send response.
-				string msg = "hello world! abc 123 :)";
-				int status;
-				send_all(fd, msg.data(), msg.size(), &status, 0);
-			} else {
+			if(err.code != ERROR_STATUS::SUCCESS.code) {
 				fprintf(stderr, "error during recv_http(): %s\n", err.message.c_str());
+				fprintf(stderr, "errno: %i\n", errno);
+				return;//break;
 			}
+			/*
+			printf("request head length: %lu\n", request.head_length);
+			printf("request body length: %lu\n", request.body_length);
+			*/
+
+			// send response.
+			http_response response = this->generate_response(request);
+			send_http(fd, err, response);
+			if(err.code != ERROR_STATUS::SUCCESS.code) {
+				fprintf(stderr, "error during send_http(): %s\n", err.message.c_str());
+				fprintf(stderr, "errno: %i\n", errno);
+				return;//break;
+			}
+			/*
+			printf("response head length: %lu\n", response.buffer_head.length());
+			printf("response body length: %lu\n", response.buffer_body.length());
+			printf("response head:\n%s\n", response.buffer_head.c_str());
+			printf("response body:\n%s\n", response.buffer_body.c_str());
+			*/
+		}
+
+		virtual http_response generate_response(const http_request& request) {
+			http_response response;
+			string& content = response.buffer_body;
+
+			// add extra headers.
+			header_dict extra_headers;
+			{
+				extra_headers[HTTP::HEADERS::content_type] = HTTP::CONTENT_TYPES::text;
+			}
+			{
+				// milliseconds since epoch.
+				char temp[256];
+				const auto now = std::chrono::duration_cast<std::chrono::milliseconds, int64_t>(std::chrono::system_clock::now().time_since_epoch());
+				const int64_t now_i64 = now.count();
+				int len = snprintf(temp, 256, "%li", now_i64);
+				extra_headers[HTTP::HEADERS::date] = string(temp, len);
+			}
+
+			// build content.
+			std::vector<string> list;
+			list.push_back("==============================");
+			list.push_back("start line");
+			list.push_back("------------------------------");
+			list.push_back(request.method);
+			list.push_back(request.target);
+			list.push_back(request.protocol);
+			list.push_back("==============================");
+			list.push_back("request headers");
+			list.push_back("------------------------------");
+			for(const auto& [key,val] : request.headers) {
+				char temp[1024];
+				int len = snprintf(temp, 1024, "%s: %s\n", key.c_str(), val.c_str());
+				list.push_back(string(temp, len));
+			}
+			list.push_back("==============================");
+			list.push_back("extra headers");
+			list.push_back("------------------------------");
+			for(const auto& [key,val] : extra_headers) {
+				char temp[1024];
+				int len = snprintf(temp, 1024, "%s: %s\n", key.c_str(), val.c_str());
+				list.push_back(string(temp, len));
+			}
+			list.push_back("==============================");
+			list.push_back("content");
+			list.push_back("------------------------------");
+			list.push_back(string(request.content()));
+			list.push_back("==============================");
+			list.push_back("EOF");
+			list.push_back("------------------------------");
+			for(const string str : list) {
+				content.append(str);
+				content.append("\n");
+			}
+
+			// build response.
+			response.protocol = request.protocol;
+			response.status = HTTP::STATUS_CODES::s200;
+
+			return response;
 		}
 	};
-
 }
 
 

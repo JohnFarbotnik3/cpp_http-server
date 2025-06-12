@@ -12,6 +12,7 @@ namespace HTTP {
 		};
 
 		// 2xx
+		const status s200 { 200, "Ok" };
 		const status s201 { 201, "Created" };
 		const status s204 { 204, "No Content" };
 	};
