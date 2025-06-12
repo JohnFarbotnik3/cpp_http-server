@@ -1,11 +1,9 @@
-# include "./test_sockets.cpp"
-#include <string>
+#include "./http/server_http.cpp"
 
 int main(const int argc, const char** argv) {
-	//test_address_conversions();
-	//test_address_info();
-	if(argc <= 1) printf("missing arg[1]: is_server (0|1)\n");
+	if(argc <= 1) printf("missing arg[1]: portname (string)\n");
 	if(argc <= 1) exit(1);
-	bool is_server = std::stoi(argv[1]);
-	test_socket_connect_or_listen(is_server);
+	const char* portname = argv[1];
+	HTTP::HTTPServer server(NULL, portname);
+	server.start_listen();
 }
