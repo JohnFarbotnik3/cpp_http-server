@@ -42,7 +42,7 @@ std::vector<string> split(const string& str, const string& delim) {
 	return list;
 }
 
-std::array<string, 2> split_pair(const string& str, const string& delim) {
+std::array<string, 2> split_2(const string& str, const string& delim) {
 	std::array<string, 2> list;
 	int pos = str.find(delim);
 	if(pos == str.npos) {
@@ -54,6 +54,7 @@ std::array<string, 2> split_pair(const string& str, const string& delim) {
 	}
 	return list;
 }
+
 
 
 

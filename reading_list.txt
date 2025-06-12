@@ -1,0 +1,5 @@
+
+https://github.com/nghttp2/nghttp2
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Range_requests
+
+QUIC protocol

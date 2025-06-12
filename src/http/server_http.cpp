@@ -6,8 +6,8 @@ https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Messages
 
 */
 
-#include "./server_tcp.cpp"
-#include <algorithm>
+#include "../tcp/server_tcp.cpp"
+#include "./definitions/headers.cpp"
 #include <map>
 #include <string>
 #include <string_view>
@@ -20,15 +20,16 @@ const int		HTTP_HEADER_MAXLEN	= 1024 * 10;// 10 KiB
 const int		HTTP_REQUEST_MAXLEN	= 1024 * 1024 * 10;// 10 MiB
 
 enum HTTP_STATUS {
-	CLOSED = 0,
-	SUCCESS = 1,
-	ERR_HEADER_READ,
-	ERR_HEADER_MAXLEN,
-	ERR_REQUEST_MAXLEN,
-};
-
-namespace HTTP_HEADERS {
-	const string content_length = "content-length";
+	SUCCESS = 0,
+	CLOSED_DURING_HEAD,
+	CLOSED_DURING_BODY,
+	RECV_ERR_DURING_HEAD,
+	RECV_ERR_DURING_BODY,
+	ERR_MAXLEN_HEAD,
+	ERR_MAXLEN_BODY,
+	MISSING_START_NEWLINE,
+	MISSING_HEADER_NEWLINE,
+	MISSING_HEADER_COLON,
 };
 
 using header_dict = std::map<string, string>;
@@ -51,8 +52,8 @@ struct http_request {
 struct http_response {
 	// start line.
 	string		protocol;
-	int			status;
-	string		message;
+	int			status_code;
+	string		status_text;
 	// headers.
 	header_dict	headers;
 	// content - NOTE: this points to an associated buffer.
@@ -60,105 +61,123 @@ struct http_response {
 	char*		content_end;
 };
 
-http_request recv_http(int fd, int* status, int flags=0) {
+http_request recv_http(int fd, int* status) {
 	http_request request;
 	string& buffer = request.buffer;
 
-	// read until end of HTTP header section is found.
+	// receive header section.
 	{
-		const int chunk_sz = 1024;
-		while(buffer.length() < HTTP_HEADER_MAXLEN) {
-			// read some more data.
+		const int MAX_HEAD_LENGTH = 1024 * 10;// 10 KiB
+		// read until end of header-section is found.
+		int scan_start = 0;
+		while(true) {
+			// read some data.
+			const int chunk_sz = 512;
 			char temp[chunk_sz];
 			int len = recv(fd, temp, chunk_sz, 0);
 			// check if connection closed or errored during recv.
 			if(len == 0) {
-				*status = HTTP_STATUS::CLOSED;
+				*status = HTTP_STATUS::CLOSED_DURING_HEAD;
 				return request;
 			}
 			if(len == -1) {
-				*status = HTTP_STATUS::ERR_HEADER_READ;
+				*status = HTTP_STATUS::RECV_ERR_DURING_HEAD;
 				return request;
 			}
-			// add data to buffer.
+			// append data to buffer.
 			buffer.append(temp, len);
-			/*
-			check if header end characters were found in new chunk of data.
-
-			also check a few characters back in case part of the header-end
-			string was read in last iteration.
-			*/
-			size_t end = buffer.length();
-			size_t beg = std::max<size_t>(0, end - chunk_sz - HTTP_HEADER_END.length());
-			size_t pos = buffer.find(HTTP_HEADER_END, beg);
-			if(pos != std::string::npos) {
-				request.head_length = pos;
-				request.body_length = buffer.length() - request.head_length;
+			// check if max length exceeded.
+			if(buffer.length() > MAX_HEAD_LENGTH) {
+				*status = HTTP_STATUS::ERR_MAXLEN_HEAD;
+				return request;
+			}
+			// check for end of headers.
+			int pos = buffer.find(HTTP_HEADER_END, scan_start);
+			if(pos != string::npos) {
+				request.head_length = pos + HTTP_HEADER_END.length();
 				break;
+			} else {
+				// move scan start to (near) end of buffer, leaving some padding in case
+				// only part of end-of-header was received during this iteration.
+				scan_start = buffer.length() - HTTP_HEADER_END.length();
 			}
 		}
-		if(buffer.length() >= HTTP_HEADER_MAXLEN) {
-			*status = HTTP_STATUS::ERR_HEADER_MAXLEN;
+	}
+
+	// parse start line.
+	{
+		int end = buffer.find(HTTP_HEADER_NEWLINE);
+		if(end != string::npos) {
+			int a=0, b=0;
+			// method.
+			b = buffer.find(" ", a);
+			request.method = to_lowercase(buffer.substr(a, b-a));
+			// target.
+			a = b + 1;
+			b = buffer.find(" ", a);
+			request.target = to_lowercase(buffer.substr(a, b-a));
+			// protocol.
+			a = b + 1;
+			b = end;
+			request.protocol = to_lowercase(buffer.substr(a, b-a));
+		} else {
+			*status = HTTP_STATUS::MISSING_START_NEWLINE;
 			return request;
 		}
 	}
 
-	// parse headers.
-	// TODO - continue update from here. (buffer was turned into a string)
+	// parse header lines.
 	{
-		std::string_view header_str(buffer.data(), buffer.data() + head_length);
-		std::string_view line;
-		size_t line_pos = 0;
-		size_t line_end;
-		// parse first line.
-		{
-			line_end = header_str.find(HTTP_HEADER_NEWLINE, line_pos);
-			line = header_str.substr(line_pos, line_end-line_pos);
-			std::vector<string> list = split(string(line), " ");
-			request.method		= to_lowercase(list[0]);
-			request.target		= to_lowercase(list[1]);// TODO: are URLs case-insensitive?
-			request.protocol	= to_lowercase(list[2]);
-		}
-		// parse following lines.
-		while(line_pos < header_str.size()) {
-			line_end = header_str.find(HTTP_HEADER_NEWLINE, line_pos);
-			line = header_str.substr(line_pos, line_end-line_pos);
-			// get header key-value pair.
-			std::array<string, 2> list = split_pair(string(line), ":");
-			string key = to_lowercase(list[0]);// TODO: should I trim both sides?
-			string val = to_lowercase(list[1]);
-			request.headers[key] = val;
-			// advance to next line.
-			line_pos = line_end + strlen(HTTP_HEADER_NEWLINE);
+		int beg = buffer.find(HTTP_HEADER_NEWLINE) + HTTP_HEADER_NEWLINE.length();
+		while(true) {
+			// find end of header line.
+			int end = buffer.find(HTTP_HEADER_NEWLINE, beg);
+			if(end == string::npos) {
+				*status = HTTP_STATUS::MISSING_HEADER_NEWLINE;
+				return request;
+			}
+			// check if end of headers reached.
+			if(beg == end) break;
+			// find header separator.
+			int mid = buffer.find(":", beg);
+			if(mid == string::npos) {
+				*status = HTTP_STATUS::MISSING_HEADER_COLON;
+				return request;
+			}
+			// add to header dictionary.
+			const string key = buffer.substr(beg, mid-beg);
+			const string val = buffer.substr(mid+1, end-(mid+1));
+			request.headers[to_lowercase(key)] = val;
+			// advance to the next line.
+			beg = end + HTTP_HEADER_NEWLINE.length();
 		}
 	}
 
-	// read rest of message (if content length was given).
-	if(request.headers.contains(HTTP_HEADERS::content_length)) {
+	// receive content section (if any).
+	if(request.headers.contains(HTTP::HEADERS::content_length)) {
 		// get content length.
-		const string str = request.headers[HTTP_HEADERS::content_length];
+		const string str = request.headers.at(HTTP::HEADERS::content_length);
 		int content_length;
 		std::from_chars(str.data(), str.data()+str.size(), content_length);
-		// some of the content may have already been read when getting header.
-		int x = request.body_length;
-		request.body_length = content_length;
+		// some of the content may have already been read into buffer when receiving headers.
+		request.body_length = buffer.length() - request.head_length;
 		// read content.
 		const int chunk_sz = 1024 * 16;
-		while(x < content_length) {
+		while(request.body_length < content_length) {
 			char temp[chunk_sz];
 			int len = recv(fd, temp, chunk_sz, 0);
-			// check if connection closed or errored during recv.
+			// check if connection closed or errored during read.
 			if(len == 0) {
-				*status = HTTP_STATUS::CLOSED;
+				*status = HTTP_STATUS::CLOSED_DURING_BODY;
 				return request;
 			}
 			if(len == -1) {
-				*status = HTTP_STATUS::ERR_HEADER_READ;
+				*status = HTTP_STATUS::RECV_ERR_DURING_BODY;
 				return request;
 			}
 			// add data to buffer.
 			buffer.append(temp, len);
-			x += len;
+			request.body_length += len;
 		}
 	}
 
