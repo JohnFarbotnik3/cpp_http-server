@@ -8,6 +8,8 @@ https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Messages
 
 #include "../tcp/server_tcp.cpp"
 #include "./definitions/headers.cpp"
+#include "./definitions/status_codes.cpp"
+#include <cstdio>
 #include <map>
 #include <string>
 
@@ -21,8 +23,9 @@ namespace HTTP {
 		};
 
 		const error_status SUCCESS					{ 0, "" };
-		const error_status CLOSED_DURING_HEAD		{ 1, "CLOSED_DURING_HEAD" };
-		const error_status CLOSED_DURING_BODY		{ 2, "CLOSED_DURING_BODY" };
+
+		const error_status RECV_CLOSED_DURING_HEAD	{ 1, "RECV_CLOSED_DURING_HEAD" };
+		const error_status RECV_CLOSED_DURING_BODY	{ 2, "RECV_CLOSED_DURING_BODY" };
 		const error_status RECV_ERR_DURING_HEAD		{ 3, "RECV_ERR_DURING_HEAD" };
 		const error_status RECV_ERR_DURING_BODY		{ 4, "RECV_ERR_DURING_BODY" };
 		const error_status ERR_MAXLEN_HEAD			{ 5, "ERR_MAXLEN_HEAD" };
@@ -30,6 +33,12 @@ namespace HTTP {
 		const error_status MISSING_START_NEWLINE	{ 7, "MISSING_START_NEWLINE" };
 		const error_status MISSING_HEADER_NEWLINE	{ 8, "MISSING_HEADER_NEWLINE" };
 		const error_status MISSING_HEADER_COLON		{ 9, "MISSING_HEADER_COLON" };
+
+		const error_status SEND_CLOSED_DURING_HEAD	{ 1, "SEND_CLOSED_DURING_HEAD" };
+		const error_status SEND_CLOSED_DURING_BODY	{ 2, "SEND_CLOSED_DURING_BODY" };
+		const error_status SEND_ERR_DURING_HEAD		{ 3, "SEND_ERR_DURING_HEAD" };
+		const error_status SEND_ERR_DURING_BODY		{ 4, "SEND_ERR_DURING_BODY" };
+
 	}
 
 	using header_dict = std::map<string, string>;
@@ -50,10 +59,11 @@ namespace HTTP {
 	};
 
 	struct http_response {
+		string		buffer_head;
+		string		buffer_body;
 		// start line.
-		string		protocol;
-		int			status_code;
-		string		status_text;
+		string						protocol;
+		HTTP::STATUS_CODES::status	status;
 		// headers.
 		header_dict	headers;
 		// content - NOTE: this points to an associated buffer.
@@ -66,7 +76,8 @@ namespace HTTP {
 	const int		HTTP_HEADER_MAXLEN	= 1024 * 10;// 10 KiB
 	const int		HTTP_REQUEST_MAXLEN	= 1024 * 1024 * 10;// 10 MiB
 
-	http_request recv_http(int fd, ERROR_STATUS::error_status& error) {
+	http_request
+	recv_http(int fd, ERROR_STATUS::error_status& error) {
 		http_request request;
 		string& buffer = request.buffer;
 
@@ -82,7 +93,7 @@ namespace HTTP {
 				int len = recv(fd, temp, chunk_sz, 0);
 				// check if connection closed or errored during recv.
 				if(len == 0) {
-					error = ERROR_STATUS::CLOSED_DURING_HEAD;
+					error = ERROR_STATUS::RECV_CLOSED_DURING_HEAD;
 					return request;
 				}
 				if(len == -1) {
@@ -173,7 +184,7 @@ namespace HTTP {
 				int len = recv(fd, temp, chunk_sz, 0);
 				// check if connection closed or errored during read.
 				if(len == 0) {
-					error = ERROR_STATUS::CLOSED_DURING_BODY;
+					error = ERROR_STATUS::RECV_CLOSED_DURING_BODY;
 					return request;
 				}
 				if(len == -1) {
@@ -190,9 +201,78 @@ namespace HTTP {
 		return request;
 	}
 
-	int send_http(int fd, void* msg, int len, int* status, int flags=0) {
-		// TODO
-		return 0;
+	void
+	send_http(int fd, ERROR_STATUS::error_status& error, http_response& response) {
+		string& buffer_head = response.buffer_head;
+		string& buffer_body = response.buffer_body;
+
+		// add "content-length".
+		// NOTE: "content-type" header will still have to be set externally.
+		if(buffer_body.length() > 0) {
+			char temp[256];
+			sprintf(temp, "%lu", buffer_body.length());
+			response.headers[HTTP::HEADERS::content_length] = string(temp);
+		}
+
+		// build start line.
+		{
+			char temp[256];
+			sprintf(temp, "%s %i %s", response.protocol.c_str(), response.status.code, response.status.text.c_str());
+			buffer_head.append(string(temp));
+			buffer_head.append(HTTP_HEADER_NEWLINE);
+		}
+
+		// build header lines.
+		{
+			for(const auto& [key,val] : response.headers) {
+				buffer_head.append(key);
+				buffer_head.append(": ");
+				buffer_head.append(val);
+				buffer_head.append(HTTP_HEADER_NEWLINE);
+			}
+		}
+
+		// send headers.
+		{
+			int x = 0;
+			while(x < buffer_head.length()) {
+				// write some data.
+				int len = send(fd, buffer_head.data()+x, buffer_head.length()-x, 0);
+				// check if connection closed or errored.
+				if(len == 0) {
+					error = ERROR_STATUS::SEND_CLOSED_DURING_HEAD;
+					return;
+				}
+				if(len == -1) {
+					error = ERROR_STATUS::SEND_ERR_DURING_HEAD;
+					return;
+				}
+				// advance.
+				x += len;
+			}
+		}
+
+		// send content (if any).
+		if(buffer_body.length() > 0) {
+			int x = 0;
+			while(x < buffer_body.length()) {
+				// write some data.
+				int len = send(fd, buffer_body.data()+x, buffer_body.length()-x, 0);
+				// check if connection closed or errored.
+				if(len == 0) {
+					error = ERROR_STATUS::SEND_CLOSED_DURING_BODY;
+					return;
+				}
+				if(len == -1) {
+					error = ERROR_STATUS::SEND_ERR_DURING_BODY;
+					return;
+				}
+				// advance.
+				x += len;
+			}
+		}
+
+		error = ERROR_STATUS::SUCCESS;
 	}
 
 	struct HTTPServer : TCPServer {
