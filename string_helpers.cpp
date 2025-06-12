@@ -5,6 +5,7 @@
 using string = std::string;
 
 // TODO: check if these mutate original string, or if std::string is deep-copied.
+// !!! WRITE TESTS !!!
 
 // https://stackoverflow.com/questions/313970/how-to-convert-an-instance-of-stdstring-to-lower-case
 string to_lowercase(string str) {
