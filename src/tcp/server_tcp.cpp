@@ -14,16 +14,6 @@
 using string = std::string;
 
 // ============================================================
-// helpers
-// ------------------------------------------------------------
-
-string get_address_string(sockaddr_storage& addr, socklen_t& addrlen) {
-	char buf[INET6_ADDRSTRLEN];
-	inet_ntop(addr.ss_family, &addr, buf, sizeof(buf));
-	return string(buf);
-}
-
-// ============================================================
 // server
 // ------------------------------------------------------------
 
@@ -91,19 +81,34 @@ struct TCPServer {
 		int backlog = 5;
 		status = listen(listenfd, backlog);
 		if(status == -1) {
-			fprintf(stderr, "error: failed to listen for connections (errno: %i)\n", errno);
+			fprintf(stderr, "error: failed to listen for connections (err: %s)\n", strerror(errno));
 			return 1;
 		}
-		printf("listening for connections on port %s\n", portname);
+		printf("err: %s\n", strerror(errno));
+		printf("listening for connections on port %s (listen_sockfd: %i)\n", portname, listenfd);
 
-		// accept connections, spawning a worker thread for each new connection.
-		accept_connection_struct connection_info;
+		// accept connections.
 		while(true) {
+			// accept connection.
+			accept_connection_struct connection_info;
+
+			// https://stackoverflow.com/questions/24515526/error-invalid-argument-while-trying-to-accept-a-connection-from-a-client
+			// https://linux.die.net/man/2/accept
+			//connection_info.addrlen = sizeof(connection_info.addr);// initialize with size of address buffer.
+			// NOTE: the intermittent crash seems to have been fixed by zeroing out connection_info.
+			//		leftover data seems to have been causing the "accept" function to misbehave.
+			memset(&connection_info, 0, sizeof(connection_info));
 			int newfd = accept(listenfd, (sockaddr*)&connection_info.addr, &connection_info.addrlen);
-			if(status == -1) {
-				fprintf(stderr, "error: failed to listen for connections (errno: %i)\n", errno);
-				return 1;
+			if(newfd == -1) {
+				fprintf(stderr, "error: failed to accept connection (err: %s)\n", strerror(errno));
+				if(errno == EINVAL) {
+					fprintf(stderr, "addrlen: %u\n", connection_info.addrlen);
+					fprintf(stderr, "addrstr: %s\n", get_address_string(connection_info.addr, connection_info.addrlen).c_str());
+				}
+				continue;
 			}
+
+			// spawn worker thread.
 			connection_info.sockfd = newfd;
 			std::thread worker_thread(&TCPServer::accept_connection, this, connection_info);
 			worker_thread.detach();
@@ -129,10 +134,10 @@ struct TCPServer {
 		int					sockfd;
 	};
 	void accept_connection(accept_connection_struct connection_info) {
-		printf("worker worker started,  sockfd: %i\n", connection_info.sockfd);
+		printf("worker thread started,  sockfd: %i\n", connection_info.sockfd);
 		this->handle_connection(connection_info);
 		close(connection_info.sockfd);
-		printf("worker worker finished, sockfd: %i\n", connection_info.sockfd);
+		printf("worker thread finished, sockfd: %i\n", connection_info.sockfd);
 	}
 	virtual void handle_connection(accept_connection_struct connection_info) {
 		// print info about accepted connection.

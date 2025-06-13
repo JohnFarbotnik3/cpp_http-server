@@ -1,5 +1,17 @@
+#include <arpa/inet.h>
 #include <netinet/in.h>
+#include <string>
 #include <sys/socket.h>
+
+// ============================================================
+// printing functions.
+// ------------------------------------------------------------
+
+std::string get_address_string(sockaddr_storage& addr, socklen_t& addrlen) {
+	char buf[INET6_ADDRSTRLEN];
+	inet_ntop(addr.ss_family, &addr, buf, sizeof(buf));
+	return std::string(buf);
+}
 
 // ============================================================
 // send and receive functions - tcp.
