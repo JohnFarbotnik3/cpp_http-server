@@ -3,3 +3,25 @@ https://github.com/nghttp2/nghttp2
 https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Range_requests
 
 QUIC protocol
+https://developer.mozilla.org/en-US/docs/Glossary/HTTP
+https://developer.mozilla.org/en-US/docs/Glossary/HTTP_2
+https://developer.mozilla.org/en-US/docs/Glossary/QUIC
+
+https://wiki.mozilla.org/Security/Guidelines/Web_Security
+
+HTTP: caching.
+https://www.rfc-editor.org/rfc/rfc7234
+
+
+
+> note about responding to request methods:
+"""
+The set of methods allowed by a target resource can be listed in an
+   Allow header field (Section 7.4.1).  However, the set of allowed
+   methods can change dynamically.  When a request method is received
+   that is unrecognized or not implemented by an origin server, the
+   origin server SHOULD respond with the 501 (Not Implemented) status
+   code.  When a request method is received that is known by an origin
+   server but not allowed for the target resource, the origin server
+   SHOULD respond with the 405 (Method Not Allowed) status code.
+"""

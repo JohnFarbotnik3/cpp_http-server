@@ -3,18 +3,19 @@ This was written with the help of the following guides:
 <Beej's networking guide (c)>
 https://bhch.github.io/posts/2017/11/writing-an-http-server-from-scratch/
 https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Messages
-
 */
+
+#ifndef F_SERVER_HTTP
+#define F_SERVER_HTTP
 
 #include "../tcp/server_tcp.cpp"
 #include "./definitions/headers.cpp"
-#include "./definitions/status_codes.cpp"
-#include "./definitions/content_types.cpp"
+#include "./definitions/mime_types.cpp"
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <map>
 #include <string>
+#include "./structs.cpp"
 
 namespace HTTP {
 	using string = std::string;
@@ -44,44 +45,13 @@ namespace HTTP {
 
 	}
 
-	using header_dict = std::map<string, string>;
-
-	struct http_request {
-		string		buffer;
-		size_t		head_length	= 0;// length of header section.
-		size_t		body_length	= 0;// length of content section (if any).
-		// start line.
-		string		method;
-		string		target;
-		string		protocol;
-		// headers.
-		header_dict	headers;
-		// content.
-		std::string_view content() const {
-			return std::string_view(buffer.data() + head_length, body_length);
-		}
-	};
-
-	struct http_response {
-		string		buffer_head;
-		string		buffer_body;
-		// start line.
-		string						protocol;
-		HTTP::STATUS_CODES::status	status;
-		// headers.
-		header_dict	headers;
-		// content - NOTE: this points to an associated buffer.
-		char*		content_beg;
-		char*		content_end;
-	};
-
 	const string	HTTP_HEADER_NEWLINE	= "\r\n";
 	const string	HTTP_HEADER_END		= "\r\n\r\n";
 	const int		HTTP_HEADER_MAXLEN	= 1024 * 10;// 10 KiB
 	const int		HTTP_REQUEST_MAXLEN	= 1024 * 1024 * 10;// 10 MiB
 
 	http_request
-	recv_http(int fd, ERROR_STATUS::error_status& error) {
+	recv_http_request(int fd, ERROR_STATUS::error_status& error) {
 		http_request request;
 		string& buffer = request.buffer;
 
@@ -131,7 +101,7 @@ namespace HTTP {
 				int a=0, b=0;
 				// method.
 				b = buffer.find(" ", a);
-				request.method = to_lowercase_ascii(buffer.substr(a, b-a));
+				request.method = to_uppercase_ascii(buffer.substr(a, b-a));
 				// target.
 				a = b + 1;
 				b = buffer.find(" ", a);
@@ -206,7 +176,7 @@ namespace HTTP {
 	}
 
 	void
-	send_http(int fd, ERROR_STATUS::error_status& error, http_response& response) {
+	send_http_response(int fd, ERROR_STATUS::error_status& error, http_response& response) {
 		string& buffer_head = response.buffer_head;
 		string& buffer_body = response.buffer_body;
 
@@ -221,7 +191,7 @@ namespace HTTP {
 		// build start line.
 		{
 			char temp[256];
-			snprintf(temp, 256, "%s %i %s", response.protocol.c_str(), response.status.code, response.status.text.c_str());
+			snprintf(temp, 256, "%s %i %s", response.protocol.c_str(), response.status_code, STATUS_CODES.at(response.status_code).c_str());
 			buffer_head.append(string(temp));
 			buffer_head.append(HTTP_HEADER_NEWLINE);
 		}
@@ -295,33 +265,37 @@ namespace HTTP {
 			// TODO: automatically close after N seconds of no traffic, or after T total seconds.
 			// TODO: figure out why putting req-res cycle in a while loop doesn't work.
 
-			// get request.
-			ERROR_STATUS::error_status err;
-			http_request request = recv_http(fd, err);
-			if(err.code != ERROR_STATUS::SUCCESS.code) {
-				fprintf(stderr, "error during recv_http(): %s\n", err.message.c_str());
-				fprintf(stderr, "errno: %i\n", errno);
-				return;//break;
-			}
-			/*
-			printf("request head length: %lu\n", request.head_length);
-			printf("request body length: %lu\n", request.body_length);
-			*/
+			while(true) {
+				// get request.
+				ERROR_STATUS::error_status err;
+				http_request request = recv_http_request(fd, err);
+				if(err.code != ERROR_STATUS::SUCCESS.code) {
+					fprintf(stderr, "error during recv_http(): %s\n", err.message.c_str());
+					fprintf(stderr, "errno: %i\n", errno);
+					//return;
+					break;
+				}
+				///*
+				printf("request head length: %lu\n", request.head_length);
+				printf("request body length: %lu\n", request.body_length);
+				//*/
 
-			// send response.
-			http_response response = this->generate_response(request);
-			send_http(fd, err, response);
-			if(err.code != ERROR_STATUS::SUCCESS.code) {
-				fprintf(stderr, "error during send_http(): %s\n", err.message.c_str());
-				fprintf(stderr, "errno: %i\n", errno);
-				return;//break;
+				// send response.
+				http_response response = this->generate_response(request);
+				send_http_response(fd, err, response);
+				if(err.code != ERROR_STATUS::SUCCESS.code) {
+					fprintf(stderr, "error during send_http(): %s\n", err.message.c_str());
+					fprintf(stderr, "errno: %i\n", errno);
+					//return;
+					break;
+				}
+				///*
+				printf("response head length: %lu\n", response.buffer_head.length());
+				printf("response body length: %lu\n", response.buffer_body.length());
+				printf("response head:\n%s\n", response.buffer_head.c_str());
+				printf("response body:\n%s\n", response.buffer_body.c_str());
+				//*/
 			}
-			/*
-			printf("response head length: %lu\n", response.buffer_head.length());
-			printf("response body length: %lu\n", response.buffer_body.length());
-			printf("response head:\n%s\n", response.buffer_head.c_str());
-			printf("response body:\n%s\n", response.buffer_body.c_str());
-			*/
 		}
 
 		virtual http_response generate_response(const http_request& request) {
@@ -331,7 +305,7 @@ namespace HTTP {
 			// add extra headers.
 			header_dict extra_headers;
 			{
-				extra_headers[HTTP::HEADERS::content_type] = HTTP::CONTENT_TYPES::text;
+				extra_headers[HTTP::HEADERS::content_type] = HTTP::MIME_TYPES.at("txt");
 			}
 			{
 				// milliseconds since epoch.
@@ -379,16 +353,12 @@ namespace HTTP {
 			}
 
 			// build response.
-			response.protocol = request.protocol;
-			response.status = HTTP::STATUS_CODES::s200;
+			response.protocol		= request.protocol;
+			response.status_code	= 200;
 
 			return response;
 		}
 	};
 }
 
-
-
-
-
-
+#endif
