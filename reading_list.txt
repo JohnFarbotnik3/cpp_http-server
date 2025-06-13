@@ -7,6 +7,9 @@ https://developer.mozilla.org/en-US/docs/Glossary/HTTP
 https://developer.mozilla.org/en-US/docs/Glossary/HTTP_2
 https://developer.mozilla.org/en-US/docs/Glossary/QUIC
 
+https://developer.mozilla.org/en-US/docs/Glossary/Rate_limit
+https://en.wikipedia.org/wiki/List_of_HTTP_status_codes
+
 https://wiki.mozilla.org/Security/Guidelines/Web_Security
 
 HTTP: caching.
