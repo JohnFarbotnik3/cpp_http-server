@@ -5,20 +5,17 @@
 - some handlers should have a config struct, containing info loaded from config files.
 
 
-> crash resilience
-- server shouldnt crash if single thread experiences problem.
-
-
 > logging
 - start logging stuff to file (in format: "[debug-level] TEXT ABC 123")
 
 
 > HTTP handlers
-- create a "src/http/handlers" folder for storing various <request> processing functions.
-	these functions should generate a <response> which can then be sent in main http request function.
-- first create a simple static file-server, and experiment with cache behaviour.
-- then try to create a simple request proxying server to replace current NodeJS proxy implementation.
-- then start working on ML projects and interfacing them with the browser.
+* first create a simple static file-server, and experiment with cache behaviour.
+* then try to create a simple request proxying server to replace current NodeJS proxy implementation.
+	- will require writing an HTTPClient, so that the server can also act as a client.
+	- try to mirror the state of the connections between client-side and server-side.
+* also try creating an SQLite server with database behaviour.
+* then start working on ML projects and interfacing them with the browser.
 
 
 > create combined server for ff-extensions
