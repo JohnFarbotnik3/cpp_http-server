@@ -1,9 +1,0 @@
-
-
-> HTTP handlers
-- create a "src/http/handlers" folder for storing various <request> processing functions.
-	these functions should generate a <response> which can then be sent in main http request function.
-- first create a simple static file-server, and experiment with cache behaviour.
-- then try to create a simple request proxying server to replace current NodeJS proxy implementation.
-- then start working on ML projects and interfacing them with the browser.
-

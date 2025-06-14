@@ -11,6 +11,8 @@ namespace HTTP {
 	namespace HEADERS {
 		using string = std::string;
 
+		const string connection	= "connection";
+
 		// ============================================================
 		// request headers.
 		// ------------------------------------------------------------

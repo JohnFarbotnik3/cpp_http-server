@@ -1,0 +1,36 @@
+
+
+> cleanup
+- consolidate tcp-server related files into single file "TCPServer.cpp"
+- rename "server_http.cpp" to "HTTPServer.cpp"
+
+
+> config
+- some handlers should have a config struct, containing info loaded from config files.
+
+> crash resilience
+- server shouldnt crash if single thread experiences problem.
+
+
+> logging
+- start logging stuff to file (in format: "[debug-level] TEXT ABC 123")
+
+
+> HTTP handlers
+- create a "src/http/handlers" folder for storing various <request> processing functions.
+	these functions should generate a <response> which can then be sent in main http request function.
+- first create a simple static file-server, and experiment with cache behaviour.
+- then try to create a simple request proxying server to replace current NodeJS proxy implementation.
+- then start working on ML projects and interfacing them with the browser.
+
+
+> create combined server for ff-extensions
+- will require multiple features/handlers under the same umbrella:
+	- sqlite DB (ex: for storing maps of form: Map<db_name, Map<post_id, post_json>>)
+	- file get/put (ex: for thumbnails)
+	- ML service (ex: for processing thumbnail + post_json)
+		^ map from {thumbnail, one-hot-tags-encoding} to {estimated_post_score}
+- sqlite DB and file get/put can likely be done under the base HTTP-server project in "handlers" folder.
+
+...
+

@@ -8,17 +8,57 @@ https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Messages
 #ifndef F_SERVER_HTTP
 #define F_SERVER_HTTP
 
-#include "../tcp/server_tcp.cpp"
-#include "./definitions/headers.cpp"
-#include "./definitions/mime_types.cpp"
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <string>
-#include "./structs.cpp"
+#include "./TCPServer.cpp"
+#include "./definitions/status_codes.cpp"
+#include "./definitions/headers.cpp"
+#include "./definitions/mime_types.cpp"
+#include "./utils/string_helpers.cpp"
 
 namespace HTTP {
 	using string = std::string;
+
+	// ============================================================
+	// structs
+	// ------------------------------------------------------------
+
+	using header_dict = std::map<string, string>;
+
+	struct http_request {
+		string		buffer;
+		size_t		head_length	= 0;// length of header section.
+		size_t		body_length	= 0;// length of content section (if any).
+		// start line.
+		string		method;
+		string		target;
+		string		protocol;
+		// headers.
+		header_dict	headers;
+		// content.
+		std::string_view content() const {
+			return std::string_view(buffer.data() + head_length, body_length);
+		}
+	};
+
+	struct http_response {
+		string		buffer_head;
+		string		buffer_body;
+		// start line.
+		string	protocol;
+		int		status_code;
+		// headers.
+		header_dict	headers;
+		// content - NOTE: this points to an associated buffer.
+		char*		content_beg;
+		char*		content_end;
+	};
+
+	// ============================================================
+	// send + receive
+	// ------------------------------------------------------------
 
 	namespace ERROR_STATUS {
 		struct error_status {
@@ -105,11 +145,11 @@ namespace HTTP {
 				// target.
 				a = b + 1;
 				b = buffer.find(" ", a);
-				request.target = to_lowercase_ascii(buffer.substr(a, b-a));
+				request.target = buffer.substr(a, b-a);
 				// protocol.
 				a = b + 1;
 				b = end;
-				request.protocol = to_lowercase_ascii(buffer.substr(a, b-a));
+				request.protocol = to_uppercase_ascii(buffer.substr(a, b-a));
 			} else {
 				error = ERROR_STATUS::MISSING_START_NEWLINE;
 				return request;
@@ -206,6 +246,9 @@ namespace HTTP {
 			}
 		}
 
+		// add blank header line (to indicate end of header section).
+		buffer_head.append(HTTP_HEADER_NEWLINE);
+
 		// send headers.
 		{
 			int x = 0;
@@ -250,6 +293,10 @@ namespace HTTP {
 		error = ERROR_STATUS::SUCCESS;
 	}
 
+	// ============================================================
+	// server
+	// ------------------------------------------------------------
+
 	struct HTTPServer : TCPServer {
 		HTTPServer(const char* hostname, const char* portname):
 		TCPServer(hostname, portname) {}
@@ -263,7 +310,6 @@ namespace HTTP {
 
 			// perform request-response cycle until user closes socket.
 			// TODO: automatically close after N seconds of no traffic, or after T total seconds.
-			// TODO: figure out why putting req-res cycle in a while loop doesn't work.
 
 			while(true) {
 				// get request.
@@ -280,8 +326,11 @@ namespace HTTP {
 				printf("request body length: %lu\n", request.body_length);
 				//*/
 
+				// generate response.
+				http_response response = this->handle_request(request);
+				response.headers[HTTP::HEADERS::connection] = "keep-alive";// re-use socket for additional messages.
+
 				// send response.
-				http_response response = this->generate_response(request);
 				send_http_response(fd, err, response);
 				if(err.code != ERROR_STATUS::SUCCESS.code) {
 					fprintf(stderr, "error during send_http(): %s\n", err.message.c_str());
@@ -293,12 +342,12 @@ namespace HTTP {
 				printf("response head length: %lu\n", response.buffer_head.length());
 				printf("response body length: %lu\n", response.buffer_body.length());
 				printf("response head:\n%s\n", response.buffer_head.c_str());
-				printf("response body:\n%s\n", response.buffer_body.c_str());
+				//printf("response body:\n%s\n", response.buffer_body.c_str());
 				//*/
 			}
 		}
 
-		virtual http_response generate_response(const http_request& request) {
+		virtual http_response handle_request(const http_request& request) {
 			http_response response;
 			string& content = response.buffer_body;
 
@@ -329,28 +378,26 @@ namespace HTTP {
 			list.push_back("------------------------------");
 			for(const auto& [key,val] : request.headers) {
 				char temp[1024];
-				int len = snprintf(temp, 1024, "%s: %s\n", key.c_str(), val.c_str());
+				int len = snprintf(temp, 1024, "%s: %s", key.c_str(), val.c_str());
 				list.push_back(string(temp, len));
 			}
 			list.push_back("==============================");
-			list.push_back("extra headers");
+			list.push_back("extra headers (not present in response)");
 			list.push_back("------------------------------");
 			for(const auto& [key,val] : extra_headers) {
 				char temp[1024];
-				int len = snprintf(temp, 1024, "%s: %s\n", key.c_str(), val.c_str());
+				int len = snprintf(temp, 1024, "%s: %s", key.c_str(), val.c_str());
 				list.push_back(string(temp, len));
 			}
 			list.push_back("==============================");
 			list.push_back("content");
 			list.push_back("------------------------------");
 			list.push_back(string(request.content()));
-			list.push_back("==============================");
-			list.push_back("EOF");
-			list.push_back("------------------------------");
 			for(const string str : list) {
 				content.append(str);
 				content.append("\n");
 			}
+			content.append("EOF");
 
 			// build response.
 			response.protocol		= request.protocol;

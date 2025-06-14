@@ -1,4 +1,6 @@
-#include "./http/server_http.cpp"
+#include "./HTTPServer.cpp"
+#include <cstdio>
+#include <cstdlib>
 
 int main(const int argc, const char** argv) {
 	if(argc <= 1) printf("missing arg[1]: portname (string)\n");
