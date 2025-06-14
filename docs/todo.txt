@@ -1,12 +1,9 @@
 
 
-> cleanup
-- consolidate tcp-server related files into single file "TCPServer.cpp"
-- rename "server_http.cpp" to "HTTPServer.cpp"
-
 
 > config
 - some handlers should have a config struct, containing info loaded from config files.
+
 
 > crash resilience
 - server shouldnt crash if single thread experiences problem.

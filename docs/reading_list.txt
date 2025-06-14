@@ -12,10 +12,12 @@ https://en.wikipedia.org/wiki/List_of_HTTP_status_codes
 
 https://wiki.mozilla.org/Security/Guidelines/Web_Security
 
-HTTP: caching.
+> HTTP: caching.
 https://www.rfc-editor.org/rfc/rfc7234
 
-
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Connection_management_in_HTTP_1.x
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Protocol_upgrade_mechanism
+https://en.wikipedia.org/wiki/Maximum_segment_size
 
 > note about responding to request methods:
 """

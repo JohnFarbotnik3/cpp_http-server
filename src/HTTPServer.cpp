@@ -25,6 +25,8 @@ namespace HTTP {
 	// structs
 	// ------------------------------------------------------------
 
+	const string	HTTP_PROTOCOL_1_1	= "HTTP/1.1";
+
 	using header_dict = std::map<string, string>;
 
 	struct http_request {
@@ -47,7 +49,7 @@ namespace HTTP {
 		string		buffer_head;
 		string		buffer_body;
 		// start line.
-		string	protocol;
+		string	protocol = HTTP_PROTOCOL_1_1;
 		int		status_code;
 		// headers.
 		header_dict	headers;
@@ -303,47 +305,61 @@ namespace HTTP {
 
 		void handle_connection(accept_connection_struct connection_info) override {
 			int fd = connection_info.sockfd;
-			string ipstr =  get_address_string(connection_info.addr, connection_info.addrlen);
-			printf("accepted HTTP connection\n");
-			printf("\tsockfd: %i\n", fd);
-			printf("\tipaddr: %s\n", ipstr.c_str());
+			try {
+				string ipstr =  get_address_string(connection_info.addr, connection_info.addrlen);
+				printf("accepted HTTP connection\n");
+				printf("\tsockfd: %i\n", fd);
+				printf("\tipaddr: %s\n", ipstr.c_str());
 
-			// perform request-response cycle until user closes socket.
-			// TODO: automatically close after N seconds of no traffic, or after T total seconds.
+				// perform request-response cycle until user closes socket.
+				// TODO: automatically close after N seconds of no traffic, or after T total seconds.
 
-			while(true) {
-				// get request.
-				ERROR_STATUS::error_status err;
-				http_request request = recv_http_request(fd, err);
-				if(err.code != ERROR_STATUS::SUCCESS.code) {
-					fprintf(stderr, "error during recv_http(): %s\n", err.message.c_str());
-					fprintf(stderr, "errno: %i\n", errno);
-					//return;
-					break;
+				while(true) {
+					// get request.
+					ERROR_STATUS::error_status err;
+					http_request request = recv_http_request(fd, err);
+					if(err.code != ERROR_STATUS::SUCCESS.code) {
+						fprintf(stderr, "error during recv_http(): %s\n", err.message.c_str());
+						fprintf(stderr, "errno: %i\n", errno);
+						//return;
+						break;
+					}
+					///*
+					printf("request head length: %lu\n", request.head_length);
+					printf("request body length: %lu\n", request.body_length);
+					//*/
+
+					// generate response.
+					http_response response = this->handle_request(request);
+					response.headers[HTTP::HEADERS::connection] = "keep-alive";// re-use socket for additional messages.
+
+					// send response.
+					send_http_response(fd, err, response);
+					if(err.code != ERROR_STATUS::SUCCESS.code) {
+						fprintf(stderr, "error during send_http(): %s\n", err.message.c_str());
+						fprintf(stderr, "errno: %i\n", errno);
+						//return;
+						break;
+					}
+					///*
+					printf("response head length: %lu\n", response.buffer_head.length());
+					printf("response body length: %lu\n", response.buffer_body.length());
+					printf("response head:\n%s\n", response.buffer_head.c_str());
+					//printf("response body:\n%s\n", response.buffer_body.c_str());
+					//*/
 				}
-				///*
-				printf("request head length: %lu\n", request.head_length);
-				printf("request body length: %lu\n", request.body_length);
-				//*/
-
-				// generate response.
-				http_response response = this->handle_request(request);
-				response.headers[HTTP::HEADERS::connection] = "keep-alive";// re-use socket for additional messages.
-
-				// send response.
-				send_http_response(fd, err, response);
-				if(err.code != ERROR_STATUS::SUCCESS.code) {
-					fprintf(stderr, "error during send_http(): %s\n", err.message.c_str());
-					fprintf(stderr, "errno: %i\n", errno);
-					//return;
-					break;
+			} catch (const std::exception& e) {
+				fprintf(stderr, "%s\n", e.what());
+				try {
+					// attempt to notify client of server error.
+					http_response response;
+					response.protocol = HTTP_PROTOCOL_1_1;
+					response.status_code = 500;
+					ERROR_STATUS::error_status err;
+					send_http_response(fd, err, response);
+				} catch (const std::exception& e) {
+					fprintf(stderr, "%s\n", e.what());
 				}
-				///*
-				printf("response head length: %lu\n", response.buffer_head.length());
-				printf("response body length: %lu\n", response.buffer_body.length());
-				printf("response head:\n%s\n", response.buffer_head.c_str());
-				//printf("response body:\n%s\n", response.buffer_body.c_str());
-				//*/
 			}
 		}
 
@@ -399,10 +415,8 @@ namespace HTTP {
 			}
 			content.append("EOF");
 
-			// build response.
-			response.protocol		= request.protocol;
-			response.status_code	= 200;
-
+			// return response.
+			response.status_code = 200;
 			return response;
 		}
 	};

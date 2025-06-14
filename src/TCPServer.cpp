@@ -213,22 +213,16 @@ namespace HTTP {
 
 			// accept connections.
 			while(true) {
-				// accept connection.
-				accept_connection_struct connection_info;
-
+				// prepare connection_info struct.
 				// https://stackoverflow.com/questions/24515526/error-invalid-argument-while-trying-to-accept-a-connection-from-a-client
 				// https://linux.die.net/man/2/accept
-				//connection_info.addrlen = sizeof(connection_info.addr);// initialize with size of address buffer.
-				// NOTE: the intermittent crash seems to have been fixed by zeroing out connection_info.
-				//		leftover data seems to have been causing the "accept" function to misbehave.
-				memset(&connection_info, 0, sizeof(connection_info));
+				accept_connection_struct connection_info;
+				connection_info.addrlen = sizeof(connection_info.addr);
+
+				// accept connection.
 				int newfd = accept(listenfd, (sockaddr*)&connection_info.addr, &connection_info.addrlen);
 				if(newfd == -1) {
 					fprintf(stderr, "error: failed to accept connection (err: %s)\n", strerror(errno));
-					if(errno == EINVAL) {
-						fprintf(stderr, "addrlen: %u\n", connection_info.addrlen);
-						fprintf(stderr, "addrstr: %s\n", get_address_string(connection_info.addr, connection_info.addrlen).c_str());
-					}
 					continue;
 				}
 
