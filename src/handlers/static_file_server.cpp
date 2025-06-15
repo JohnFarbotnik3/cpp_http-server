@@ -1,7 +1,6 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <string_view>
 #include "../http_structs.cpp"
 #include "../definitions/methods.cpp"
 #include "../definitions/headers.cpp"
@@ -93,7 +92,7 @@ namespace HTTP::Handlers::static_file_server {
 			const string content = read_file(target, status);
 			if(status == 0) {
 				response.status_code = 200;
-				response.buffer_body = content;
+				response.body = content;
 				// set content type.
 				string ext = target.extension();
 				string mmt = HTTP::MIME_TYPES.at("");
@@ -112,8 +111,7 @@ namespace HTTP::Handlers::static_file_server {
 				return response;
 			}
 			int status;
-			const std::string_view& content = request.content();
-			write_file(target, status, content.data(), content.size());
+			write_file(target, status, request.body.data(), request.body.size());
 			response.status_code = (status == 0) ? 200 : 500;
 			return response;
 		}

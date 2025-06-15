@@ -56,8 +56,8 @@ namespace HTTP {
 						break;
 					}
 					///*
-					printf("request head length: %lu\n", request.head_length);
-					printf("request body length: %lu\n", request.body_length);
+					printf("request head length: %lu\n", request.head.length());
+					printf("request body length: %lu\n", request.body.length());
 					//*/
 
 					// generate response.
@@ -74,9 +74,9 @@ namespace HTTP {
 						break;
 					}
 					///*
-					printf("response head length: %lu\n", response.buffer_head.length());
-					printf("response body length: %lu\n", response.buffer_body.length());
-					printf("response head:\n%s\n", response.buffer_head.c_str());
+					printf("response head length: %lu\n", response.head.length());
+					printf("response body length: %lu\n", response.body.length());
+					printf("response head:\n%s\n", response.head.c_str());
 					//printf("response body:\n%s\n", response.buffer_body.c_str());
 					//*/
 				}
@@ -96,7 +96,7 @@ namespace HTTP {
 
 		virtual http_response handle_request(const http_request& request) {
 			http_response response;
-			string& content = response.buffer_body;
+			string& content = response.body;
 
 			// build content.
 			std::vector<string> list;
@@ -134,7 +134,7 @@ namespace HTTP {
 			list.push_back("==============================");
 			list.push_back("content");
 			list.push_back("------------------------------");
-			list.push_back(string(request.content()));
+			list.push_back(request.body);
 			for(const string str : list) {
 				content.append(str);
 				content.append("\n");
@@ -144,7 +144,7 @@ namespace HTTP {
 			// return response.
 			response.status_code = 200;
 			response.headers[HEADERS::content_type] = get_mime_type("txt");
-			response.headers[HEADERS::content_length] = int_to_string(response.buffer_body.length());
+			response.headers[HEADERS::content_length] = int_to_string(response.body.length());
 			return response;
 		}
 	};
