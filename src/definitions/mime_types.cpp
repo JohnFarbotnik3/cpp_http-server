@@ -22,6 +22,11 @@ namespace HTTP {
 		// image
 		{"png"	, "image/png"},
 	});
+
+	std::string get_mime_type(const std::string ext) {
+		if(MIME_TYPES.contains(ext)) return MIME_TYPES.at(ext);
+		return "application/octet-stream";
+	}
 }
 
 

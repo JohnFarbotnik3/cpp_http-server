@@ -99,6 +99,7 @@ namespace HTTP::Handlers::static_file_server {
 				string mmt = HTTP::MIME_TYPES.at("");
 				if(HTTP::MIME_TYPES.contains(ext)) mmt = HTTP::MIME_TYPES.at(ext);
 				response.headers[HTTP::HEADERS::content_type] = mmt;
+				response.headers[HTTP::HEADERS::content_length] = content.length();
 			} else {
 				response.status_code = 500;
 			}

@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <string>
 #include <sys/socket.h>
 #include <charconv>
@@ -17,15 +18,16 @@ namespace HTTP {
 
 		const error_status SUCCESS					{ 0, "" };
 
-		const error_status RECV_CLOSED_DURING_HEAD	{ 1, "RECV_CLOSED_DURING_HEAD" };
-		const error_status RECV_CLOSED_DURING_BODY	{ 2, "RECV_CLOSED_DURING_BODY" };
-		const error_status RECV_ERR_DURING_HEAD		{ 3, "RECV_ERR_DURING_HEAD" };
-		const error_status RECV_ERR_DURING_BODY		{ 4, "RECV_ERR_DURING_BODY" };
-		const error_status ERR_MAXLEN_HEAD			{ 5, "ERR_MAXLEN_HEAD" };
-		const error_status ERR_MAXLEN_BODY			{ 6, "ERR_MAXLEN_BODY" };
-		const error_status MISSING_START_NEWLINE	{ 7, "MISSING_START_NEWLINE" };
-		const error_status MISSING_HEADER_NEWLINE	{ 8, "MISSING_HEADER_NEWLINE" };
-		const error_status MISSING_HEADER_COLON		{ 9, "MISSING_HEADER_COLON" };
+		const error_status RECV_CLOSED_DURING_HEAD	{  1, "RECV_CLOSED_DURING_HEAD" };
+		const error_status RECV_CLOSED_DURING_BODY	{  2, "RECV_CLOSED_DURING_BODY" };
+		const error_status RECV_ERR_DURING_HEAD		{  3, "RECV_ERR_DURING_HEAD" };
+		const error_status RECV_ERR_DURING_BODY		{  4, "RECV_ERR_DURING_BODY" };
+		const error_status ERR_MAXLEN_HEAD			{  5, "ERR_MAXLEN_HEAD" };
+		const error_status ERR_MAXLEN_BODY			{  6, "ERR_MAXLEN_BODY" };
+		const error_status MISSING_START_NEWLINE	{  7, "MISSING_START_NEWLINE" };
+		const error_status MISSING_START_DELIMITER	{  8, "MISSING_START_DELIMITER" };
+		const error_status MISSING_HEADER_NEWLINE	{  9, "MISSING_HEADER_NEWLINE" };
+		const error_status MISSING_HEADER_COLON		{ 10, "MISSING_HEADER_COLON" };
 
 		const error_status SEND_CLOSED_DURING_HEAD	{ 1, "SEND_CLOSED_DURING_HEAD" };
 		const error_status SEND_CLOSED_DURING_BODY	{ 2, "SEND_CLOSED_DURING_BODY" };
@@ -40,13 +42,6 @@ namespace HTTP {
 	const int		HTTP_HEADER_MAXLEN	= 1024 * 10;// 10 KiB
 	const int		HTTP_REQUEST_MAXLEN	= 1024 * 1024 * 10;// 10 MiB
 
-	// TODO - break build/parse into seperate functions, since client & server message formats are very similar,
-	// only really differing in start-line implementation.
-	//parse_x()
-	//build_x()
-	//parse_start_line()
-	//build_start_line()
-	//...
 
 	error_status recv_message_head(int fd, string& buffer, size_t& head_length, const int MAX_HEAD_LENGTH) {
 		// read until end of header-section is found.
@@ -120,57 +115,126 @@ namespace HTTP {
 	}
 
 
+	int64_t string_to_int(const string str) {
+		const int64_t value = std::stoll(str);
+		return value;
+	}
+	string int_to_string(const int64_t val) {
+		char temp[64];
+		snprintf(temp, 64, "%li", val);
+		return string(temp);
+	}
+
+
+	error_status build_request_start(string& buffer, const http_request& request) {
+		buffer.append(request.method);
+		buffer.append(" ");
+		buffer.append(request.target);
+		buffer.append(" ");
+		buffer.append(request.protocol);
+		buffer.append(HTTP_HEADER_NEWLINE);
+		return ERROR_STATUS::SUCCESS;
+	}
+	error_status parse_request_start(const string& buffer, http_request& request) {
+		int end = buffer.find(HTTP_HEADER_NEWLINE);
+		if(end != string::npos) {
+			// method.
+			int a=0, b=0;
+			b = buffer.find(" ", a);
+			if((b == string::npos) | (b > end)) return ERROR_STATUS::MISSING_START_DELIMITER;
+			request.method = to_uppercase_ascii(buffer.substr(a, b-a));
+			// target.
+			a = b + 1;
+			b = buffer.find(" ", a);
+			if((b == string::npos) | (b > end)) return ERROR_STATUS::MISSING_START_DELIMITER;
+			request.target = buffer.substr(a, b-a);
+			// protocol.
+			a = b + 1;
+			b = end;
+			request.protocol = to_uppercase_ascii(buffer.substr(a, b-a));
+		} else {
+			return ERROR_STATUS::MISSING_START_NEWLINE;
+		}
+		return ERROR_STATUS::SUCCESS;
+	}
+	error_status build_response_start(string& buffer, const http_response& response) {
+		char status_cstr[32];
+		snprintf(status_cstr, 32, "%i", response.status_code);
+		buffer.append(response.protocol);
+		buffer.append(" ");
+		buffer.append(string(status_cstr));
+		buffer.append(" ");
+		buffer.append(STATUS_CODES.at(response.status_code));
+		buffer.append(HTTP_HEADER_NEWLINE);
+		return ERROR_STATUS::SUCCESS;
+	}
+	error_status parse_response_start(const string& buffer, http_response& response) {
+		int end = buffer.find(HTTP_HEADER_NEWLINE);
+		if(end != string::npos) {
+			// protocol.
+			int a=0, b=0;
+			b = buffer.find(" ", a);
+			if((b == string::npos) | (b > end)) return ERROR_STATUS::MISSING_START_DELIMITER;
+			response.protocol = to_uppercase_ascii(buffer.substr(a, b-a));
+			// status_code.
+			a = b + 1;
+			b = buffer.find(" ", a);
+			if((b == string::npos) | (b > end)) return ERROR_STATUS::MISSING_START_DELIMITER;
+			response.status_code = string_to_int(buffer.substr(a, b-a));
+		} else {
+			return ERROR_STATUS::MISSING_START_NEWLINE;
+		}
+		return ERROR_STATUS::SUCCESS;
+	}
+
+
+	error_status build_header_lines(string& buffer, const header_dict& headers) {
+		for(const auto& [key,val] : headers) {
+			buffer.append(key);
+			buffer.append(": ");
+			buffer.append(val);
+			buffer.append(HTTP_HEADER_NEWLINE);
+		}
+		return ERROR_STATUS::SUCCESS;
+	}
+	error_status parse_header_lines(const string& buffer, header_dict& headers) {
+		int beg = buffer.find(HTTP_HEADER_NEWLINE) + HTTP_HEADER_NEWLINE.length();
+		while(true) {
+			// find end of header line.
+			int end = buffer.find(HTTP_HEADER_NEWLINE, beg);
+			if(end == string::npos) return ERROR_STATUS::MISSING_HEADER_NEWLINE;
+			// check if end of headers reached.
+			if(beg == end) break;
+			// find header separator.
+			int mid = buffer.find(":", beg);
+			if(mid == string::npos) return ERROR_STATUS::MISSING_HEADER_COLON;
+			// add to header dictionary.
+			const string key = buffer.substr(beg, mid-beg);
+			const string val = buffer.substr(mid+1, end-(mid+1));
+			headers[to_lowercase_ascii(key)] = trim_leading(val);
+			// advance to the next line.
+			beg = end + HTTP_HEADER_NEWLINE.length();
+		}
+		return ERROR_STATUS::SUCCESS;
+	}
+
+
 	error_status recv_http_request(int fd, http_request& request) {
 		string& buffer = request.buffer;
+		error_status err;
 
 		// receive header section.
-		{
-			const int MAX_HEAD_LENGTH = 1024 * 10;// 10 KiB
-			const error_status err = recv_message_head(fd, buffer, request.head_length, MAX_HEAD_LENGTH);
-			if(err.code != ERROR_STATUS::SUCCESS.code) return err;
-		}
+		const int MAX_HEAD_LENGTH = 1024 * 10;// 10 KiB
+		err = recv_message_head(fd, buffer, request.head_length, MAX_HEAD_LENGTH);
+		if(err.code != ERROR_STATUS::SUCCESS.code) return err;
 
 		// parse start line.
-		{
-			int end = buffer.find(HTTP_HEADER_NEWLINE);
-			if(end != string::npos) {
-				int a=0, b=0;
-				// method.
-				b = buffer.find(" ", a);
-				request.method = to_uppercase_ascii(buffer.substr(a, b-a));
-				// target.
-				a = b + 1;
-				b = buffer.find(" ", a);
-				request.target = buffer.substr(a, b-a);
-				// protocol.
-				a = b + 1;
-				b = end;
-				request.protocol = to_uppercase_ascii(buffer.substr(a, b-a));
-			} else {
-				return ERROR_STATUS::MISSING_START_NEWLINE;
-			}
-		}
+		err = parse_request_start(buffer, request);
+		if(err.code != ERROR_STATUS::SUCCESS.code) return err;
 
 		// parse header lines.
-		{
-			int beg = buffer.find(HTTP_HEADER_NEWLINE) + HTTP_HEADER_NEWLINE.length();
-			while(true) {
-				// find end of header line.
-				int end = buffer.find(HTTP_HEADER_NEWLINE, beg);
-				if(end == string::npos) return ERROR_STATUS::MISSING_HEADER_NEWLINE;
-				// check if end of headers reached.
-				if(beg == end) break;
-				// find header separator.
-				int mid = buffer.find(":", beg);
-				if(mid == string::npos) return ERROR_STATUS::MISSING_HEADER_COLON;
-				// add to header dictionary.
-				const string key = buffer.substr(beg, mid-beg);
-				const string val = buffer.substr(mid+1, end-(mid+1));
-				request.headers[to_lowercase_ascii(key)] = trim_leading(val);
-				// advance to the next line.
-				beg = end + HTTP_HEADER_NEWLINE.length();
-			}
-		}
+		err = parse_header_lines(buffer, request.headers);
+		if(err.code != ERROR_STATUS::SUCCESS.code) return err;
 
 		// receive content section (if any).
 		if(request.headers.contains(HTTP::HEADERS::content_length)) {
@@ -191,31 +255,11 @@ namespace HTTP {
 		string& buffer_head = response.buffer_head;
 		string& buffer_body = response.buffer_body;
 
-		// add "content-length".
-		// NOTE: "content-type" header will still have to be set externally.
-		if(buffer_body.length() > 0) {
-			char temp[256];
-			snprintf(temp, 256, "%lu", buffer_body.length());
-			response.headers[HTTP::HEADERS::content_length] = string(temp);
-		}
-
 		// build start line.
-		{
-			char temp[256];
-			snprintf(temp, 256, "%s %i %s", response.protocol.c_str(), response.status_code, STATUS_CODES.at(response.status_code).c_str());
-			buffer_head.append(string(temp));
-			buffer_head.append(HTTP_HEADER_NEWLINE);
-		}
+		build_response_start(buffer_head, response);
 
 		// build header lines.
-		{
-			for(const auto& [key,val] : response.headers) {
-				buffer_head.append(key);
-				buffer_head.append(": ");
-				buffer_head.append(val);
-				buffer_head.append(HTTP_HEADER_NEWLINE);
-			}
-		}
+		build_header_lines(buffer_head, response.headers);
 
 		// add blank header line (to indicate end of header section).
 		buffer_head.append(HTTP_HEADER_NEWLINE);
@@ -232,5 +276,6 @@ namespace HTTP {
 
 		return ERROR_STATUS::SUCCESS;
 	}
+	// TODO - add client functions
 
 }

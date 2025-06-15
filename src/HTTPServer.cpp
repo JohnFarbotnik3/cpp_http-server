@@ -98,20 +98,6 @@ namespace HTTP {
 			http_response response;
 			string& content = response.buffer_body;
 
-			// add extra headers.
-			header_dict extra_headers;
-			{
-				extra_headers[HTTP::HEADERS::content_type] = HTTP::MIME_TYPES.at("txt");
-			}
-			{
-				// milliseconds since epoch.
-				char temp[256];
-				const auto now = std::chrono::duration_cast<std::chrono::milliseconds, int64_t>(std::chrono::system_clock::now().time_since_epoch());
-				const int64_t now_i64 = now.count();
-				int len = snprintf(temp, 256, "%li", now_i64);
-				extra_headers[HTTP::HEADERS::date] = string(temp, len);
-			}
-
 			// build content.
 			std::vector<string> list;
 			list.push_back("==============================");
@@ -131,6 +117,15 @@ namespace HTTP {
 			list.push_back("==============================");
 			list.push_back("extra headers (not present in response)");
 			list.push_back("------------------------------");
+			header_dict extra_headers;
+			{
+				// milliseconds since epoch.
+				char temp[256];
+				const auto now = std::chrono::duration_cast<std::chrono::milliseconds, int64_t>(std::chrono::system_clock::now().time_since_epoch());
+				const int64_t now_i64 = now.count();
+				int len = snprintf(temp, 256, "%li", now_i64);
+				extra_headers[HTTP::HEADERS::date] = string(temp, len);
+			}
 			for(const auto& [key,val] : extra_headers) {
 				char temp[1024];
 				int len = snprintf(temp, 1024, "%s: %s", key.c_str(), val.c_str());
@@ -148,6 +143,8 @@ namespace HTTP {
 
 			// return response.
 			response.status_code = 200;
+			response.headers[HEADERS::content_type] = get_mime_type("txt");
+			response.headers[HEADERS::content_length] = int_to_string(response.buffer_body.length());
 			return response;
 		}
 	};
