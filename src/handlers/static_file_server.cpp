@@ -18,12 +18,6 @@ namespace HTTP::Handlers::static_file_server {
 		path prefix;
 	};
 
-	bool is_path_inside_prefix_directory(const path target, const path prefix) {
-		path abs_p = fs::absolute(prefix);
-		path abs_t = fs::absolute(target);
-		return abs_t.string().contains(abs_p.string());
-	}
-
 	bool can_read_file(const path target) {
 		return fs::exists(target) && fs::is_regular_file(target);
 	}
@@ -90,14 +84,36 @@ namespace HTTP::Handlers::static_file_server {
 	http_response handle_request(const http_request& request, const config& conf) {
 		http_response response;
 
+		// by default no content is returned (overwrite header as needed).
+		response.headers[HTTP::HEADERS::content_length] = "0";
+
 		// get target file path.
-		path target = conf.prefix;
-		target.concat(request.target);
+		path target;
+		if(request.target == "/") {
+			target = path(conf.prefix / "index.html");
+		} else {
+			string str = request.target;
+			if(str.starts_with("/")) str = str.substr(1);
+			target = path(conf.prefix / str);
+		}
 
 		// security: ensure target file is within prefix directory.
-		if(!is_path_inside_prefix_directory(target, conf.prefix)) {
-			response.status_code = 404;
-			return response;
+		{
+			std::error_code ec;
+			path abs_p = fs::canonical(conf.prefix, ec);
+			path abs_t = fs::canonical(target.parent_path(), ec);
+			bool is_safe = abs_t.string().append("/").contains(abs_p.string());
+			if(!is_safe) {
+				printf("SECURITY: target outside of prefix directory:\n");
+				printf("\ttarget: %s\n", target.c_str());
+				printf("\tabs_p: %s\n", abs_p.c_str());
+				printf("\tabs_t: %s\n", abs_t.c_str());
+				if(ec) printf("\tec: %s\n", ec.message().c_str());
+				response.status_code = 404;
+				return response;
+			} else {
+				printf("\ttarget: %s\n", target.c_str());
+			}
 		}
 
 		if(request.method == HTTP::METHODS::GET) {
@@ -112,14 +128,13 @@ namespace HTTP::Handlers::static_file_server {
 				response.body = content;
 				// set content type.
 				string ext = target.extension();
-				string mmt = HTTP::MIME_TYPES.at("");
-				if(HTTP::MIME_TYPES.contains(ext)) mmt = HTTP::MIME_TYPES.at(ext);
-				response.headers[HTTP::HEADERS::content_type] = mmt;
-				response.headers[HTTP::HEADERS::content_length] = content.length();
+				response.headers[HTTP::HEADERS::content_type] = get_mime_type(ext);
+				response.headers[HTTP::HEADERS::content_length] = int_to_string(content.length());
+				return response;
 			} else {
 				response.status_code = 500;
+				return response;
 			}
-			return response;
 		}
 
 		if(request.method == HTTP::METHODS::PUT) {
@@ -128,8 +143,9 @@ namespace HTTP::Handlers::static_file_server {
 				return response;
 			}
 			int status;
+			bool file_exists = fs::is_regular_file(target);
 			write_file(target, status, request.body.data(), request.body.size());
-			response.status_code = (status == 0) ? 200 : 500;
+			response.status_code = (status != 0) ? 500 : (file_exists ? 204 : 201);
 			return response;
 		}
 
@@ -140,7 +156,7 @@ namespace HTTP::Handlers::static_file_server {
 			}
 			int status;
 			delete_file(target, status);
-			response.status_code = (status == 0) ? 200 : 500;
+			response.status_code = (status != 0) ? 500 : 204;
 			return response;
 		}
 

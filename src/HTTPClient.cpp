@@ -21,10 +21,14 @@ namespace HTTP {
 		ERROR_CODE fetch(http_request& request, http_response& response) {
 			const int sockfd = this->connection_info.sockfd;
 			ERROR_CODE err;
+
 			err = send_http_request(sockfd, request);
 			if(err != ERROR_CODE::SUCCESS) return err;
-			err = recv_http_response(sockfd, response);
+
+			http_buffer buffer(1024);
+			err = recv_http_response(sockfd, response, buffer);
 			if(err != ERROR_CODE::SUCCESS) return err;
+
 			return ERROR_CODE::SUCCESS;
 		}
 	};

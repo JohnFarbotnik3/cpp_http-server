@@ -11,23 +11,25 @@ https://www.iana.org/assignments/media-types/media-types.xhtml
 namespace HTTP {
 	std::map<std::string, std::string> MIME_TYPES({
 		// text
-		{"txt"	, "text/plain; charset=utf-8"},
-		{"html"	, "text/html"},
-		{"css"	, "text/css"},
-		{"js"	, "text/javascript; charset=utf-8"},
-		{"md"	, "text/markdown"},
+		{".txt"	, "text/plain; charset=utf-8"},
+		{".html", "text/html"},
+		{".css"	, "text/css"},
+		{".js"	, "text/javascript; charset=utf-8"},
+		{".md"	, "text/markdown"},
 
 		// application
 		{""		, "application/octet-stream"},
-		{"json"	, "application/json"},
-		{"pdf"	, "application/pdf"},
+		{".bin"	, "application/octet-stream"},
+		{".json", "application/json"},
+		{".pdf"	, "application/pdf"},
 
 		// image
-		{"png"	, "image/png"},
+		{".png"	, "image/png"},
 	});
 
 	std::string get_mime_type(const std::string ext) {
 		if(MIME_TYPES.contains(ext)) return MIME_TYPES.at(ext);
+		printf("UNRECOGNIZED FILE EXTENSION: %s\n", ext.c_str());
 		return "application/octet-stream";
 	}
 }

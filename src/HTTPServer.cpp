@@ -27,12 +27,13 @@ namespace HTTP {
 				string ipstr =  get_address_string(connection.addr, connection.addrlen);
 				printf("accepted HTTP connection | fd: %i, addr: %s\n", fd, ipstr.c_str());
 
+				http_buffer buffer(1024);
 				while(true) {
 					ERROR_CODE err;
 
 					// get request.
 					http_request request;
-					err = recv_http_request(fd, request);
+					err = recv_http_request(fd, request, buffer);
 					if(err != ERROR_CODE::SUCCESS) {
 						fprintf(stderr, "error during recv_http_request(): %s\n", ERROR_MESSAGE.at(err).c_str());
 						fprintf(stderr, "errno: %s\n", strerror(errno));
@@ -69,7 +70,7 @@ namespace HTTP {
 			response.protocol = HTTP_PROTOCOL_1_1;
 			response.status_code = 200;
 			response.body = "test abc 123 :)";
-			response.headers[HEADERS::content_type] = MIME_TYPES.at("txt");
+			response.headers[HEADERS::content_type] = get_mime_type(".txt");
 			response.headers[HEADERS::content_length] = int_to_string(response.body.length());
 			ERROR_CODE err = send_http_response(connection.sockfd, response);
 			return err;
