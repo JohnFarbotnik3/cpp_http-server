@@ -1,3 +1,6 @@
+#ifndef F_definitions_mime_types
+#define F_definitions_mime_types
+
 #include <map>
 #include <string>
 /*
@@ -29,4 +32,4 @@ namespace HTTP {
 	}
 }
 
-
+#endif

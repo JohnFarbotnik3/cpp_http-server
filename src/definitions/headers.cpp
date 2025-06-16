@@ -1,3 +1,6 @@
+#ifndef F_definitions_headers
+#define F_definitions_headers
+
 #include <string>
 /*
 NOTE: HTTP headers are case-insensitive strings followed by a colon (":").
@@ -39,3 +42,5 @@ namespace HTTP::HEADERS {
 	const string content_length		= "content-length";
 	const string content_encoding	= "content-encoding";
 }
+
+#endif

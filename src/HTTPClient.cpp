@@ -14,19 +14,18 @@
 
 namespace HTTP {
 	using string = std::string;
-	using ERROR_STATUS::error_status;
 
 	struct HTTPClient : TCPClient {
 		HTTPClient(): TCPClient() {}
 
-		error_status fetch(http_request& request, http_response& response) {
+		ERROR_CODE fetch(http_request& request, http_response& response) {
 			const int sockfd = this->connection_info.sockfd;
-			error_status err;
+			ERROR_CODE err;
 			err = send_http_request(sockfd, request);
-			if(err.code != ERROR_STATUS::SUCCESS.code) return err;
+			if(err != ERROR_CODE::SUCCESS) return err;
 			err = recv_http_response(sockfd, response);
-			if(err.code != ERROR_STATUS::SUCCESS.code) return err;
-			return ERROR_STATUS::SUCCESS;
+			if(err != ERROR_CODE::SUCCESS) return err;
+			return ERROR_CODE::SUCCESS;
 		}
 	};
 }

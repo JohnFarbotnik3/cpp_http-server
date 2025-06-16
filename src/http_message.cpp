@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <sys/socket.h>
 #include "./http_structs.cpp"
@@ -9,32 +10,40 @@
 namespace HTTP {
 	using std::string;
 
-	namespace ERROR_STATUS {
-		struct error_status {
-			int		code;
-			string	message;
-		};
-
-		const error_status SUCCESS					{ 0, "" };
-
-		const error_status RECV_CLOSED_DURING_HEAD	{  1, "RECV_CLOSED_DURING_HEAD" };
-		const error_status RECV_CLOSED_DURING_BODY	{  2, "RECV_CLOSED_DURING_BODY" };
-		const error_status RECV_ERR_DURING_HEAD		{  3, "RECV_ERR_DURING_HEAD" };
-		const error_status RECV_ERR_DURING_BODY		{  4, "RECV_ERR_DURING_BODY" };
-		const error_status ERR_MAXLEN_HEAD			{  5, "ERR_MAXLEN_HEAD" };
-		const error_status ERR_MAXLEN_BODY			{  6, "ERR_MAXLEN_BODY" };
-		const error_status MISSING_START_NEWLINE	{  7, "MISSING_START_NEWLINE" };
-		const error_status MISSING_START_DELIMITER	{  8, "MISSING_START_DELIMITER" };
-		const error_status MISSING_HEADER_NEWLINE	{  9, "MISSING_HEADER_NEWLINE" };
-		const error_status MISSING_HEADER_COLON		{ 10, "MISSING_HEADER_COLON" };
-
-		const error_status SEND_CLOSED_DURING_HEAD	{ 1, "SEND_CLOSED_DURING_HEAD" };
-		const error_status SEND_CLOSED_DURING_BODY	{ 2, "SEND_CLOSED_DURING_BODY" };
-		const error_status SEND_ERR_DURING_HEAD		{ 3, "SEND_ERR_DURING_HEAD" };
-		const error_status SEND_ERR_DURING_BODY		{ 4, "SEND_ERR_DURING_BODY" };
-
-	}
-	using ERROR_STATUS::error_status;
+	enum ERROR_CODE {
+		SUCCESS = 0,
+		SEND_CLOSED_DURING_HEAD,
+		SEND_CLOSED_DURING_BODY,
+		SEND_ERROR_DURING_HEAD,
+		SEND_ERROR_DURING_BODY,
+		RECV_CLOSED_DURING_HEAD,
+		RECV_CLOSED_DURING_BODY,
+		RECV_ERROR_DURING_HEAD,
+		RECV_ERROR_DURING_BODY,
+		ERR_MAXLEN_HEAD,
+		ERR_MAXLEN_BODY,
+		MISSING_START_NEWLINE,
+		MISSING_START_DELIMITER,
+		MISSING_HEADER_NEWLINE,
+		MISSING_HEADER_COLON,
+	};
+	const std::map<ERROR_CODE, string> ERROR_MESSAGE {
+		{SUCCESS				, "SUCCESS"},
+		{SEND_CLOSED_DURING_HEAD, "SEND_CLOSED_DURING_HEAD"},
+		{SEND_CLOSED_DURING_BODY, "SEND_CLOSED_DURING_BODY"},
+		{SEND_ERROR_DURING_HEAD	, "SEND_ERROR_DURING_HEAD"},
+		{SEND_ERROR_DURING_BODY	, "SEND_ERROR_DURING_BODY"},
+		{RECV_CLOSED_DURING_HEAD, "RECV_CLOSED_DURING_HEAD"},
+		{RECV_CLOSED_DURING_BODY, "RECV_CLOSED_DURING_BODY"},
+		{RECV_ERROR_DURING_HEAD	, "RECV_ERROR_DURING_HEAD"},
+		{RECV_ERROR_DURING_BODY	, "RECV_ERROR_DURING_BODY"},
+		{ERR_MAXLEN_HEAD		, "ERR_MAXLEN_HEAD"},
+		{ERR_MAXLEN_BODY		, "ERR_MAXLEN_BODY"},
+		{MISSING_START_NEWLINE	, "MISSING_START_NEWLINE"},
+		{MISSING_START_DELIMITER, "MISSING_START_DELIMITER"},
+		{MISSING_HEADER_NEWLINE	, "MISSING_HEADER_NEWLINE"},
+		{MISSING_HEADER_COLON	, "MISSING_HEADER_COLON"},
+	};
 
 	const string	HTTP_HEADER_NEWLINE	= "\r\n";
 	const string	HTTP_HEADER_END		= "\r\n\r\n";
@@ -53,7 +62,7 @@ namespace HTTP {
 		HTTP-1.1 pipelining was obsoleted by HTTP-2, and most browsers & servers dont bother with pipelining,
 		so it doesnt make sense to worry about here.
 	*/
-	error_status recv_message_head(int fd, string& buffer, size_t& head_length, const size_t max_head_length) {
+	ERROR_CODE recv_message_head(int fd, string& buffer, size_t& head_length, const size_t max_head_length) {
 		// read until end of header-section is found.
 		int scan_start = 0;
 		while(true) {
@@ -62,12 +71,12 @@ namespace HTTP {
 			char temp[chunk_sz];
 			int len = recv(fd, temp, chunk_sz, 0);
 			// check if connection closed or errored during recv.
-			if(len ==  0) return ERROR_STATUS::RECV_CLOSED_DURING_HEAD;
-			if(len == -1) return ERROR_STATUS::RECV_ERR_DURING_HEAD;
+			if(len ==  0) return ERROR_CODE::RECV_CLOSED_DURING_HEAD;
+			if(len == -1) return ERROR_CODE::RECV_ERROR_DURING_HEAD;
 			// append data to buffer.
 			buffer.append(temp, len);
 			// check if max length exceeded.
-			if(buffer.length() > max_head_length) return ERROR_STATUS::ERR_MAXLEN_HEAD;
+			if(buffer.length() > max_head_length) return ERROR_CODE::ERR_MAXLEN_HEAD;
 			// check for end of headers.
 			int pos = buffer.find(HTTP_HEADER_END, scan_start);
 			if(pos != string::npos) {
@@ -79,11 +88,11 @@ namespace HTTP {
 				scan_start = buffer.length() - HTTP_HEADER_END.length();
 			}
 		}
-		return ERROR_STATUS::SUCCESS;
+		return ERROR_CODE::SUCCESS;
 	}
-	error_status recv_message_body(int fd, string& buffer, size_t& body_length, const size_t content_length) {
+	ERROR_CODE recv_message_body(int fd, string& buffer, size_t& body_length, const size_t content_length) {
 		// check if content length is within bounds.
-		if(content_length > MAX_BODY_LENGTH) return ERROR_STATUS::ERR_MAXLEN_BODY;
+		if(content_length > MAX_BODY_LENGTH) return ERROR_CODE::ERR_MAXLEN_BODY;
 		// read content.
 		while(body_length < content_length) {
 			const size_t remaining = content_length - body_length;
@@ -91,39 +100,39 @@ namespace HTTP {
 			char temp[chunk_sz];
 			size_t len = recv(fd, temp, std::min(chunk_sz, remaining), 0);
 			// check if connection closed or errored during read.
-			if(len ==  0) return ERROR_STATUS::RECV_CLOSED_DURING_BODY;
-			if(len == -1) return ERROR_STATUS::RECV_ERR_DURING_BODY;
+			if(len ==  0) return ERROR_CODE::RECV_CLOSED_DURING_BODY;
+			if(len == -1) return ERROR_CODE::RECV_ERROR_DURING_BODY;
 			// add data to buffer.
 			buffer.append(temp, len);
 			body_length += len;
 		}
-		return ERROR_STATUS::SUCCESS;
+		return ERROR_CODE::SUCCESS;
 	}
-	error_status send_message_head(int fd, const char* data, const size_t size) {
+	ERROR_CODE send_message_head(int fd, const char* data, const size_t size) {
 		int x = 0;
 		while(x < size) {
 			// write some data.
 			int len = send(fd, data+x, size-x, 0);
 			// check if connection closed or errored.
-			if(len ==  0) return ERROR_STATUS::SEND_CLOSED_DURING_HEAD;
-			if(len == -1) return ERROR_STATUS::SEND_ERR_DURING_HEAD;
+			if(len ==  0) return ERROR_CODE::SEND_CLOSED_DURING_HEAD;
+			if(len == -1) return ERROR_CODE::SEND_ERROR_DURING_HEAD;
 			// advance.
 			x += len;
 		}
-		return ERROR_STATUS::SUCCESS;
+		return ERROR_CODE::SUCCESS;
 	}
-	error_status send_message_body(int fd, const char* data, const size_t size) {
+	ERROR_CODE send_message_body(int fd, const char* data, const size_t size) {
 		int x = 0;
 		while(x < size) {
 			// write some data.
 			int len = send(fd, data+x, size-x, 0);
 			// check if connection closed or errored.
-			if(len ==  0) return ERROR_STATUS::SEND_CLOSED_DURING_BODY;
-			if(len == -1) return ERROR_STATUS::SEND_ERR_DURING_BODY;
+			if(len ==  0) return ERROR_CODE::SEND_CLOSED_DURING_BODY;
+			if(len == -1) return ERROR_CODE::SEND_ERROR_DURING_BODY;
 			// advance.
 			x += len;
 		}
-		return ERROR_STATUS::SUCCESS;
+		return ERROR_CODE::SUCCESS;
 	}
 
 
@@ -138,38 +147,38 @@ namespace HTTP {
 	}
 
 
-	error_status build_request_start(string& buffer, const http_request& request) {
+	ERROR_CODE build_request_start(string& buffer, const http_request& request) {
 		buffer.append(request.method);
 		buffer.append(" ");
 		buffer.append(request.target);
 		buffer.append(" ");
 		buffer.append(request.protocol);
 		buffer.append(HTTP_HEADER_NEWLINE);
-		return ERROR_STATUS::SUCCESS;
+		return ERROR_CODE::SUCCESS;
 	}
-	error_status parse_request_start(const string& buffer, http_request& request) {
+	ERROR_CODE parse_request_start(const string& buffer, http_request& request) {
 		int end = buffer.find(HTTP_HEADER_NEWLINE);
 		if(end != string::npos) {
 			// method.
 			int a=0, b=0;
 			b = buffer.find(" ", a);
-			if((b == string::npos) | (b > end)) return ERROR_STATUS::MISSING_START_DELIMITER;
+			if((b == string::npos) | (b > end)) return ERROR_CODE::MISSING_START_DELIMITER;
 			request.method = to_uppercase_ascii(buffer.substr(a, b-a));
 			// target.
 			a = b + 1;
 			b = buffer.find(" ", a);
-			if((b == string::npos) | (b > end)) return ERROR_STATUS::MISSING_START_DELIMITER;
+			if((b == string::npos) | (b > end)) return ERROR_CODE::MISSING_START_DELIMITER;
 			request.target = buffer.substr(a, b-a);
 			// protocol.
 			a = b + 1;
 			b = end;
 			request.protocol = to_uppercase_ascii(buffer.substr(a, b-a));
 		} else {
-			return ERROR_STATUS::MISSING_START_NEWLINE;
+			return ERROR_CODE::MISSING_START_NEWLINE;
 		}
-		return ERROR_STATUS::SUCCESS;
+		return ERROR_CODE::SUCCESS;
 	}
-	error_status build_response_start(string& buffer, const http_response& response) {
+	ERROR_CODE build_response_start(string& buffer, const http_response& response) {
 		char status_cstr[32];
 		snprintf(status_cstr, 32, "%i", response.status_code);
 		buffer.append(response.protocol);
@@ -178,48 +187,48 @@ namespace HTTP {
 		buffer.append(" ");
 		buffer.append(STATUS_CODES.at(response.status_code));
 		buffer.append(HTTP_HEADER_NEWLINE);
-		return ERROR_STATUS::SUCCESS;
+		return ERROR_CODE::SUCCESS;
 	}
-	error_status parse_response_start(const string& buffer, http_response& response) {
+	ERROR_CODE parse_response_start(const string& buffer, http_response& response) {
 		int end = buffer.find(HTTP_HEADER_NEWLINE);
 		if(end != string::npos) {
 			// protocol.
 			int a=0, b=0;
 			b = buffer.find(" ", a);
-			if((b == string::npos) | (b > end)) return ERROR_STATUS::MISSING_START_DELIMITER;
+			if((b == string::npos) | (b > end)) return ERROR_CODE::MISSING_START_DELIMITER;
 			response.protocol = to_uppercase_ascii(buffer.substr(a, b-a));
 			// status_code.
 			a = b + 1;
 			b = buffer.find(" ", a);
-			if((b == string::npos) | (b > end)) return ERROR_STATUS::MISSING_START_DELIMITER;
+			if((b == string::npos) | (b > end)) return ERROR_CODE::MISSING_START_DELIMITER;
 			response.status_code = string_to_int(buffer.substr(a, b-a));
 		} else {
-			return ERROR_STATUS::MISSING_START_NEWLINE;
+			return ERROR_CODE::MISSING_START_NEWLINE;
 		}
-		return ERROR_STATUS::SUCCESS;
+		return ERROR_CODE::SUCCESS;
 	}
 
 
-	error_status build_header_lines(string& buffer, const header_dict& headers) {
+	ERROR_CODE build_header_lines(string& buffer, const header_dict& headers) {
 		for(const auto& [key,val] : headers) {
 			buffer.append(key);
 			buffer.append(": ");
 			buffer.append(val);
 			buffer.append(HTTP_HEADER_NEWLINE);
 		}
-		return ERROR_STATUS::SUCCESS;
+		return ERROR_CODE::SUCCESS;
 	}
-	error_status parse_header_lines(const string& buffer, header_dict& headers) {
+	ERROR_CODE parse_header_lines(const string& buffer, header_dict& headers) {
 		int beg = buffer.find(HTTP_HEADER_NEWLINE) + HTTP_HEADER_NEWLINE.length();
 		while(true) {
 			// find end of header line.
 			int end = buffer.find(HTTP_HEADER_NEWLINE, beg);
-			if(end == string::npos) return ERROR_STATUS::MISSING_HEADER_NEWLINE;
+			if(end == string::npos) return ERROR_CODE::MISSING_HEADER_NEWLINE;
 			// check if end of headers reached.
 			if(beg == end) break;
 			// find header separator.
 			int mid = buffer.find(":", beg);
-			if(mid == string::npos) return ERROR_STATUS::MISSING_HEADER_COLON;
+			if(mid == string::npos) return ERROR_CODE::MISSING_HEADER_COLON;
 			// add to header dictionary.
 			const string key = buffer.substr(beg, mid-beg);
 			const string val = buffer.substr(mid+1, end-(mid+1));
@@ -227,11 +236,11 @@ namespace HTTP {
 			// advance to the next line.
 			beg = end + HTTP_HEADER_NEWLINE.length();
 		}
-		return ERROR_STATUS::SUCCESS;
+		return ERROR_CODE::SUCCESS;
 	}
 
 
-	error_status send_http_request(const int fd, http_request& request) {
+	ERROR_CODE send_http_request(const int fd, http_request& request) {
 		string& buffer_head = request.head;
 		string& buffer_body = request.body;
 
@@ -240,49 +249,56 @@ namespace HTTP {
 		buffer_head.append(HTTP_HEADER_NEWLINE);
 
 		// send headers.
-		const error_status err = send_message_head(fd, buffer_head.data(), buffer_head.size());
-		if(err.code != ERROR_STATUS::SUCCESS.code) return err;
+		const ERROR_CODE err = send_message_head(fd, buffer_head.data(), buffer_head.size());
+		if(err != ERROR_CODE::SUCCESS) return err;
 
 		// send content (if any).
 		if(buffer_body.length() > 0) {
-			const error_status err = send_message_body(fd, buffer_body.data(), buffer_body.size());
-			if(err.code != ERROR_STATUS::SUCCESS.code) return err;
+			const ERROR_CODE err = send_message_body(fd, buffer_body.data(), buffer_body.size());
+			if(err != ERROR_CODE::SUCCESS) return err;
 		}
 
-		return ERROR_STATUS::SUCCESS;
+		return ERROR_CODE::SUCCESS;
 	}
-	error_status recv_http_request(const int fd, http_request& request) {
+	ERROR_CODE recv_http_request(const int fd, http_request& request) {
 		string& buffer_head = request.head;
 		string& buffer_body = request.body;
-		error_status err;
+		ERROR_CODE err;
 
 		size_t head_length = 0;
 		err = recv_message_head(fd, buffer_head, head_length, MAX_HEAD_LENGTH);
-		if(err.code != ERROR_STATUS::SUCCESS.code) return err;
+		if(err != ERROR_CODE::SUCCESS) return err;
 
 		// move partially read body from head-buffer to body-buffer (if any).
 		if(buffer_head.length() > head_length) {
-			buffer_body = buffer_head.substr(head_length, buffer_head.length() - head_length);
+			buffer_body = buffer_head.substr(head_length);
 			buffer_head.resize(head_length);
 		}
 
 		err = parse_request_start(buffer_head, request);
-		if(err.code != ERROR_STATUS::SUCCESS.code) return err;
+		if(err != ERROR_CODE::SUCCESS) return err;
 
 		err = parse_header_lines(buffer_head, request.headers);
-		if(err.code != ERROR_STATUS::SUCCESS.code) return err;
+		if(err != ERROR_CODE::SUCCESS) return err;
 
 		// receive message body (if any).
 		if(request.headers.contains(HTTP::HEADERS::content_length)) {
 			size_t content_length = string_to_int(request.headers.at(HTTP::HEADERS::content_length));
 			size_t body_length = buffer_body.length();
 			err = recv_message_body(fd, buffer_body, body_length, content_length);
-			if(err.code != ERROR_STATUS::SUCCESS.code) return err;
+			if(err != ERROR_CODE::SUCCESS) return err;
+			// remove extra data from body.
+			// this can happen if content_length doesnt match actual sent length, or client tried request-pipelining.
+			if(buffer_body.length() > content_length) {
+				request.extra_data = buffer_body.substr(content_length);
+				buffer_body.resize(content_length);
+				printf("EXTRA DATA:\n%s\n", request.extra_data.c_str());
+			}
 		}
 
-		return ERROR_STATUS::SUCCESS;
+		return ERROR_CODE::SUCCESS;
 	}
-	error_status send_http_response(const int fd, http_response& response) {
+	ERROR_CODE send_http_response(const int fd, http_response& response) {
 		string& buffer_head = response.head;
 		string& buffer_body = response.body;
 
@@ -291,46 +307,52 @@ namespace HTTP {
 		buffer_head.append(HTTP_HEADER_NEWLINE);
 
 		// send headers.
-		const error_status err = send_message_head(fd, buffer_head.data(), buffer_head.size());
-		if(err.code != ERROR_STATUS::SUCCESS.code) return err;
+		const ERROR_CODE err = send_message_head(fd, buffer_head.data(), buffer_head.size());
+		if(err != ERROR_CODE::SUCCESS) return err;
 
 		// send content (if any).
 		if(buffer_body.length() > 0) {
-			const error_status err = send_message_body(fd, buffer_body.data(), buffer_body.size());
-			if(err.code != ERROR_STATUS::SUCCESS.code) return err;
+			const ERROR_CODE err = send_message_body(fd, buffer_body.data(), buffer_body.size());
+			if(err != ERROR_CODE::SUCCESS) return err;
 		}
 
-		return ERROR_STATUS::SUCCESS;
+		return ERROR_CODE::SUCCESS;
 	}
-	error_status recv_http_response(const int fd, http_response& response) {
+	ERROR_CODE recv_http_response(const int fd, http_response& response) {
 		string& buffer_head = response.head;
 		string& buffer_body = response.body;
-		error_status err;
+		ERROR_CODE err;
 
 		size_t head_length = 0;
 		err = recv_message_head(fd, buffer_head, head_length, MAX_HEAD_LENGTH);
-		if(err.code != ERROR_STATUS::SUCCESS.code) return err;
+		if(err != ERROR_CODE::SUCCESS) return err;
 
 		// move partially read body from head-buffer to body-buffer (if any).
 		if(buffer_head.length() > head_length) {
-			buffer_body = buffer_head.substr(head_length, buffer_head.length() - head_length);
+			buffer_body = buffer_head.substr(head_length);
 			buffer_head.resize(head_length);
 		}
 
 		err = parse_response_start(buffer_head, response);
-		if(err.code != ERROR_STATUS::SUCCESS.code) return err;
+		if(err != ERROR_CODE::SUCCESS) return err;
 
 		err = parse_header_lines(buffer_head, response.headers);
-		if(err.code != ERROR_STATUS::SUCCESS.code) return err;
+		if(err != ERROR_CODE::SUCCESS) return err;
 
 		// receive message body (if any).
 		if(response.headers.contains(HTTP::HEADERS::content_length)) {
 			size_t content_length = string_to_int(response.headers.at(HTTP::HEADERS::content_length));
 			size_t body_length = buffer_body.length();
 			err = recv_message_body(fd, buffer_body, body_length, content_length);
-			if(err.code != ERROR_STATUS::SUCCESS.code) return err;
+			if(err != ERROR_CODE::SUCCESS) return err;
+			// remove extra data from body.
+			// this can happen if content_length doesnt match actual sent length, or client tried request-pipelining.
+			if(buffer_body.length() > content_length) {
+				response.extra_data = buffer_body.substr(content_length);
+				buffer_body.resize(content_length);
+			}
 		}
 
-		return ERROR_STATUS::SUCCESS;
+		return ERROR_CODE::SUCCESS;
 	}
 }

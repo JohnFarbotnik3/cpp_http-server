@@ -5,10 +5,12 @@
 #include "../definitions/methods.cpp"
 #include "../definitions/headers.cpp"
 #include "../definitions/mime_types.cpp"
+#include "../HTTPServer.cpp"
 
 namespace HTTP::Handlers::static_file_server {
 	using std::string;
-	using std::filesystem::path;
+	namespace fs = std::filesystem;
+	using fs::path;
 
 	struct config {
 		// prefix to append to target filepaths.
@@ -17,19 +19,30 @@ namespace HTTP::Handlers::static_file_server {
 	};
 
 	bool is_path_inside_prefix_directory(const path target, const path prefix) {
-		path abs_p = std::filesystem::absolute(prefix);
-		path abs_t = std::filesystem::absolute(target);
+		path abs_p = fs::absolute(prefix);
+		path abs_t = fs::absolute(target);
 		return abs_t.string().contains(abs_p.string());
 	}
 
 	bool can_read_file(const path target) {
-		return std::filesystem::exists(target) && std::filesystem::is_regular_file(target);
+		return fs::exists(target) && fs::is_regular_file(target);
 	}
 	bool can_write_file(const path target) {
-		return !std::filesystem::exists(target) || std::filesystem::is_regular_file(target);
+		return !fs::exists(target) || fs::is_regular_file(target);
 	}
 	bool can_delete_file(const path target) {
-		return std::filesystem::exists(target) && std::filesystem::is_regular_file(target);
+		return fs::exists(target) && fs::is_regular_file(target);
+	}
+
+	void make_dir(const path target, int& status) {
+		std::error_code ec;
+		fs::create_directories(target, ec);
+		if(ec) {
+			fprintf(stderr, "failed to make directory: %s (error: %s)\n", target.c_str(), ec.message().c_str());
+			status = -1;
+		} else {
+			status = 0;
+		}
 	}
 
 	string read_file(const path target, int& status) {
@@ -49,6 +62,9 @@ namespace HTTP::Handlers::static_file_server {
 	}
 
 	void write_file(const path target, int& status, const char* data, const size_t size) {
+		make_dir(target.parent_path(), status);
+		if(status != 0) return;
+
 		std::ofstream file(target, std::ios::binary);
 		if (!file.is_open()) {
 			fprintf(stderr, "failed to open file for writing: %s\n", target.c_str());
@@ -56,12 +72,13 @@ namespace HTTP::Handlers::static_file_server {
 		} else {
 			file.write(data, size);
 			status = 0;
+			errno = 0;
 		}
 	}
 
 	void delete_file(const path target, int& status) {
 		std::error_code ec;
-		bool success = std::filesystem::remove(target, ec);
+		bool success = fs::remove(target, ec);
 		if(!success) {
 			fprintf(stderr, "failed to delete file: %s (error: %s)\n", target.c_str(), ec.message().c_str());
 			status = -1;
@@ -130,4 +147,18 @@ namespace HTTP::Handlers::static_file_server {
 		response.status_code = 501;
 		return response;
 	}
+
+	// example server.
+	struct HTTPFileServer : HTTP::HTTPServer {
+		config conf;
+
+		HTTPFileServer(const char* hostname, const char* portname, config conf) : HTTPServer(hostname, portname) {
+			this->conf = conf;
+		}
+
+		ERROR_CODE handle_request(const accept_connection_struct& connection, http_request& request, http_response& response) override {
+			response = static_file_server::handle_request(request, conf);
+			return ERROR_CODE::SUCCESS;
+		}
+	};
 }

@@ -15,6 +15,7 @@ namespace HTTP {
 	struct http_request {
 		string		head;
 		string		body;
+		string		extra_data;
 		// start line.
 		string		method;
 		string		target;
@@ -26,6 +27,7 @@ namespace HTTP {
 	struct http_response {
 		string		head;
 		string		body;
+		string		extra_data;
 		// start line.
 		string	protocol = HTTP_PROTOCOL_1_1;
 		int		status_code;
