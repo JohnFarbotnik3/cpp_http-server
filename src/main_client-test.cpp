@@ -1,0 +1,31 @@
+#include "./HTTPClient.cpp"
+#include "./definitions/mime_types.cpp"
+#include <cstdio>
+#include <cstdlib>
+
+using namespace HTTP;
+
+int main(const int argc, const char** argv) {
+	HTTPClient client;
+
+	int status = client.open_connection(NULL, "3490");
+	if(status != 0) {
+		fprintf(stderr, "ERROR: failed to open connection\n");
+		exit(status);
+	}
+
+	http_request request;
+	http_response response;
+	request.method = "PUT";
+	request.target = "/abc.txt";
+	request.protocol = HTTP_PROTOCOL_1_1;
+	request.body = "test string\nabc 123 :)_ _ _";
+	request.headers[HEADERS::content_type] = MIME_TYPES.at("txt");
+	request.headers[HEADERS::content_length] = int_to_string(request.body.length() - 4);
+	ERROR_STATUS::error_status err = client.fetch(request, response);
+	if(err.code != ERROR_STATUS::SUCCESS.code) fprintf(stderr, "%s\n", err.message.c_str());
+	printf("REQUEST HEAD:\n%s\n", request.head.c_str());
+	printf("REQUEST BODY:\n%s\n", request.body.c_str());
+	printf("RESPONSE HEAD:\n%s\n", response.head.c_str());
+	printf("RESPONSE BODY:\n%s\n", response.body.c_str());
+}

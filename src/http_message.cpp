@@ -43,7 +43,16 @@ namespace HTTP {
 	const size_t	MAX_HEAD_LENGTH = 1024 * 10;// 10 KiB
 	const size_t	MAX_BODY_LENGTH = 1024 * 1024 * 1024;// 1 GiB
 
+	/*
+		WARNING: with really small messages, it is possible for this function to read the entirety
+		of this http request, plus some of the next (an example of "http request pipelining").
 
+		this implementation would dump this into the body of the current request (even if content-length = 0),
+		losing part of the next request and likely jamming up the pipeline.
+
+		HTTP-1.1 pipelining was obsoleted by HTTP-2, and most browsers & servers dont bother with pipelining,
+		so it doesnt make sense to worry about here.
+	*/
 	error_status recv_message_head(int fd, string& buffer, size_t& head_length, const size_t max_head_length) {
 		// read until end of header-section is found.
 		int scan_start = 0;
@@ -222,7 +231,7 @@ namespace HTTP {
 	}
 
 
-	error_status send_http_request(int fd, http_request& request) {
+	error_status send_http_request(const int fd, http_request& request) {
 		string& buffer_head = request.head;
 		string& buffer_body = request.body;
 
@@ -242,7 +251,7 @@ namespace HTTP {
 
 		return ERROR_STATUS::SUCCESS;
 	}
-	error_status recv_http_request(int fd, http_request& request) {
+	error_status recv_http_request(const int fd, http_request& request) {
 		string& buffer_head = request.head;
 		string& buffer_body = request.body;
 		error_status err;
@@ -253,7 +262,7 @@ namespace HTTP {
 
 		// move partially read body from head-buffer to body-buffer (if any).
 		if(buffer_head.length() > head_length) {
-			buffer_body = buffer_head.substr(0, head_length);
+			buffer_body = buffer_head.substr(head_length, buffer_head.length() - head_length);
 			buffer_head.resize(head_length);
 		}
 
@@ -273,7 +282,7 @@ namespace HTTP {
 
 		return ERROR_STATUS::SUCCESS;
 	}
-	error_status send_http_response(int fd, http_response& response) {
+	error_status send_http_response(const int fd, http_response& response) {
 		string& buffer_head = response.head;
 		string& buffer_body = response.body;
 
@@ -293,7 +302,7 @@ namespace HTTP {
 
 		return ERROR_STATUS::SUCCESS;
 	}
-	error_status recv_http_response(int fd, http_response& response) {
+	error_status recv_http_response(const int fd, http_response& response) {
 		string& buffer_head = response.head;
 		string& buffer_body = response.body;
 		error_status err;
@@ -304,7 +313,7 @@ namespace HTTP {
 
 		// move partially read body from head-buffer to body-buffer (if any).
 		if(buffer_head.length() > head_length) {
-			buffer_body = buffer_head.substr(0, head_length);
+			buffer_body = buffer_head.substr(head_length, buffer_head.length() - head_length);
 			buffer_head.resize(head_length);
 		}
 

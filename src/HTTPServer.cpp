@@ -1,6 +1,5 @@
 /*
 This was written with the help of the following guides:
-<Beej's networking guide (c)>
 https://bhch.github.io/posts/2017/11/writing-an-http-server-from-scratch/
 https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Messages
 */
@@ -20,25 +19,14 @@ https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Messages
 namespace HTTP {
 	using string = std::string;
 
-	// ============================================================
-	// send + receive
-	// ------------------------------------------------------------
-
-	// ============================================================
-	// server
-	// ------------------------------------------------------------
-
 	struct HTTPServer : TCPServer {
-		HTTPServer(const char* hostname, const char* portname):
-		TCPServer(hostname, portname) {}
+		HTTPServer(const char* hostname, const char* portname): TCPServer(hostname, portname) {}
 
 		void handle_connection(accept_connection_struct connection_info) override {
 			int fd = connection_info.sockfd;
 			try {
 				string ipstr =  get_address_string(connection_info.addr, connection_info.addrlen);
-				printf("accepted HTTP connection\n");
-				printf("\tsockfd: %i\n", fd);
-				printf("\tipaddr: %s\n", ipstr.c_str());
+				printf("accepted HTTP connection | fd: %i, addr: %s\n", fd, ipstr.c_str());
 
 				// perform request-response cycle until user closes socket.
 				// TODO: automatically close after N seconds of no traffic, or after T total seconds.
@@ -55,10 +43,6 @@ namespace HTTP {
 						//return;
 						break;
 					}
-					///*
-					printf("request head length: %lu\n", request.head.length());
-					printf("request body length: %lu\n", request.body.length());
-					//*/
 
 					// generate response.
 					http_response response = this->handle_request(request);
@@ -73,12 +57,6 @@ namespace HTTP {
 						//return;
 						break;
 					}
-					///*
-					printf("response head length: %lu\n", response.head.length());
-					printf("response body length: %lu\n", response.body.length());
-					printf("response head:\n%s\n", response.head.c_str());
-					//printf("response body:\n%s\n", response.buffer_body.c_str());
-					//*/
 				}
 			} catch (const std::exception& e) {
 				fprintf(stderr, "%s\n", e.what());
@@ -94,9 +72,9 @@ namespace HTTP {
 			}
 		}
 
+		// example echo handler.
 		virtual http_response handle_request(const http_request& request) {
 			http_response response;
-			string& content = response.body;
 
 			// build content.
 			std::vector<string> list;
@@ -136,10 +114,10 @@ namespace HTTP {
 			list.push_back("------------------------------");
 			list.push_back(request.body);
 			for(const string str : list) {
-				content.append(str);
-				content.append("\n");
+				response.body.append(str);
+				response.body.append("\n");
 			}
-			content.append("EOF");
+			response.body.append("EOF");
 
 			// return response.
 			response.status_code = 200;
