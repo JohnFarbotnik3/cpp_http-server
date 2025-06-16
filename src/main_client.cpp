@@ -6,9 +6,13 @@
 using namespace HTTP;
 
 int main(const int argc, const char** argv) {
+	if(argc <= 1) printf("missing arg[1]: portname (string)\n");
+	if(argc <= 1) exit(1);
+	const char* portname = argv[1];
+
 	HTTPClient client;
 
-	int status = client.open_connection(NULL, "3490");
+	int status = client.open_connection(NULL, portname);
 	if(status != 0) {
 		fprintf(stderr, "ERROR: failed to open connection\n");
 		exit(status);
