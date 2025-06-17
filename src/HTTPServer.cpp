@@ -27,7 +27,7 @@ namespace HTTP {
 				string ipstr =  get_address_string(connection.addr, connection.addrlen);
 				printf("accepted HTTP connection | fd: %i, addr: %s\n", fd, ipstr.c_str());
 
-				http_buffer buffer(1024);
+				string buffer;
 				while(true) {
 					ERROR_CODE err;
 

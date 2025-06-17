@@ -1,15 +1,16 @@
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <string>
 #include <sys/socket.h>
 #include "./http_structs.cpp"
-#include "./http_buffer.cpp"
 #include "./utils/string_helpers.cpp"
 #include "./definitions/headers.cpp"
 #include "./definitions/status_codes.cpp"
 
 namespace HTTP {
 	using std::string;
+	using std::string_view;
 
 	enum ERROR_CODE {
 		SUCCESS = 0,
@@ -47,46 +48,60 @@ namespace HTTP {
 	const string	HTTP_HEADER_END		= "\r\n\r\n";
 	const size_t	MAX_HEAD_LENGTH = 1024 * 10;// 10 KiB
 	const size_t	MAX_BODY_LENGTH = 1024 * 1024 * 1024;// 1 GiB
+	const size_t	BUFFER_SHRINK_THRESHOLD = 1024 * 1024;
 
-	ERROR_CODE recv_message_head(int fd, http_buffer& buffer, string& head) {
-		// read until end of header-section is found, or until max header length is reached.
-		// NOTE: the buffer may start with some data already in it from previous cycle.
-		buffer.reserve(MAX_HEAD_LENGTH - buffer.length());
+	ERROR_CODE recv_message_head(int fd, string& buffer, string& head) {
 		size_t scan_start = 0;
 		while(true) {
+			// check for end of headers.
+			if(buffer.length() > HTTP_HEADER_END.length()) {
+				size_t pos = buffer.find(HTTP_HEADER_END, scan_start);
+				if(pos != string::npos) {
+					size_t len = pos + HTTP_HEADER_END.length();
+					head = buffer.substr(0, len);
+					buffer = buffer.substr(len);
+					return ERROR_CODE::SUCCESS;
+				} else {
+					// move scan start to (near) end of buffer, leaving some padding in case
+					// only part of end-of-header was received during previous iteration.
+					scan_start = buffer.length() - HTTP_HEADER_END.length();
+				}
+			}
 			// check if max length exceeded.
 			if(buffer.length() > MAX_HEAD_LENGTH) return ERROR_CODE::ERR_MAXLEN_HEAD;
-			// check for end of headers.
-			size_t pos = buffer.string_view().find(HTTP_HEADER_END, scan_start);
-			if(pos != string::npos) {
-				head = buffer.read(pos + HTTP_HEADER_END.length());
-				return ERROR_CODE::SUCCESS;
-			} else {
-				// move scan start to (near) end of buffer, leaving some padding in case
-				// only part of end-of-header was received during previous iteration.
-				if(buffer.length() > HTTP_HEADER_END.length()) scan_start = buffer.length() - HTTP_HEADER_END.length();
-			}
 			// read some more data.
-			size_t remaining = MAX_HEAD_LENGTH - buffer.length();
-			ssize_t len = buffer.buffer_recv(fd, remaining);
+			char temp[1024];
+			ssize_t len = recv(fd, temp, 1024, 0);
 			if(len == 0) return ERROR_CODE::RECV_CLOSED_DURING_HEAD;
 			if(len <  0) return ERROR_CODE::RECV_ERROR_DURING_HEAD;
+			buffer.append(temp, len);
 		}
 		return ERROR_CODE::UNKNOWN_ERROR;
 	}
-	ERROR_CODE recv_message_body(int fd, http_buffer& buffer, string& body, const size_t content_length) {
+	ERROR_CODE recv_message_body(int fd, string& buffer, string& body, const size_t content_length) {
 		// check if content length is within bounds.
 		if(content_length > MAX_BODY_LENGTH) return ERROR_CODE::ERR_MAXLEN_BODY;
-		// read content.
-		buffer.reserve(content_length);
-		while(buffer.length() < content_length) {
-			size_t remaining = content_length - buffer.length();
-			ssize_t len = buffer.buffer_recv(fd, std::min(remaining, 4096lu));
+		// check if body has already been read into buffer.
+		// NOTE: in theory, the buffer is currently small so this isnt very expensive.
+		if(buffer.length() >= content_length) {
+			body = buffer.substr(0, content_length);
+			buffer = buffer.substr(content_length);
+			return ERROR_CODE::SUCCESS;
+		}
+		// read rest of content.
+		// NOTE: it is read directly into body to avoid expensive allocate+copy on large content.
+		body = buffer;
+		buffer.resize(0);
+		body.reserve(content_length);
+		while(body.length() < content_length) {
+			char temp[8192];
+			size_t remaining = content_length - body.length();
+			size_t count = std::min<size_t>(remaining, 8192);
+			ssize_t len = recv(fd, temp, count, 0);
 			if(len == 0) return ERROR_CODE::RECV_CLOSED_DURING_BODY;
 			if(len <  0) return ERROR_CODE::RECV_ERROR_DURING_BODY;
-			remaining -= len;
+			body.append(temp, len);
 		}
-		body = buffer.read(content_length);
 		return ERROR_CODE::SUCCESS;
 	}
 	ERROR_CODE send_message(int fd, const char* data, const size_t size) {
@@ -245,12 +260,12 @@ namespace HTTP {
 
 		return ERROR_CODE::SUCCESS;
 	}
-	ERROR_CODE recv_http_request(const int fd, http_request& request, http_buffer& buffer) {
+	ERROR_CODE recv_http_request(const int fd, http_request& request, string& buffer) {
 		string& head = request.head;
 		string& body = request.body;
 		ERROR_CODE err;
 
-		buffer.shift_to_start();
+		if(buffer.capacity() > BUFFER_SHRINK_THRESHOLD) buffer.shrink_to_fit();
 
 		err = recv_message_head(fd, buffer, head);
 		if(err != ERROR_CODE::SUCCESS) return err;
@@ -270,12 +285,12 @@ namespace HTTP {
 
 		return ERROR_CODE::SUCCESS;
 	}
-	ERROR_CODE recv_http_response(const int fd, http_response& response, http_buffer& buffer) {
+	ERROR_CODE recv_http_response(const int fd, http_response& response, string& buffer) {
 		string& head = response.head;
 		string& body = response.body;
 		ERROR_CODE err;
 
-		buffer.shift_to_start();
+		if(buffer.capacity() > BUFFER_SHRINK_THRESHOLD) buffer.shrink_to_fit();
 
 		err = recv_message_head(fd, buffer, head);
 		if(err != ERROR_CODE::SUCCESS) return err;

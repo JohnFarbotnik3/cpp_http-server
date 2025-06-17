@@ -1,4 +1,12 @@
 
+
+> write thorough request tests to ensure stability of server,
+including when pipelining.
+* I replace http_buffer with string, but I've only tested it a little.
+- testing a bunch of GET, PUT, DELETE operations against static_file_server
+would be an easy way to do this.
+
+
 > recursively <chown> git directory to try and make it easier to copy and archive.
 
 

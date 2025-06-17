@@ -25,7 +25,7 @@ namespace HTTP {
 			err = send_http_request(sockfd, request);
 			if(err != ERROR_CODE::SUCCESS) return err;
 
-			http_buffer buffer(1024);
+			string buffer;
 			err = recv_http_response(sockfd, response, buffer);
 			if(err != ERROR_CODE::SUCCESS) return err;
 
