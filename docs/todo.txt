@@ -2,6 +2,10 @@
 > recursively <chown> git directory to try and make it easier to copy and archive.
 
 
+> figure out how hard it is to make server capable of basic HTTPS (self-signed),
+for purposes of more secure local use. (SSL/TLS)
+
+
 > config
 - some handlers should have a config struct, containing info loaded from config files.
 

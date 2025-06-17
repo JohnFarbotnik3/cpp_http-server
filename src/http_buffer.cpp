@@ -93,7 +93,7 @@ namespace HTTP {
 			return len;
 		}
 
-		// append N characters to buffer - reserving more space as needed.
+		// append N characters to buffer - advances write position, reserves more space as needed.
 		void append(char* src, size_t len) {
 			if(this->capacity_remaining() < len) this->reserve(len);
 			memcpy(data + write_position, src, len);
