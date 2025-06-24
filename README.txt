@@ -1,11 +1,2 @@
-build:
-g++ -std=c++23 -o ./bin/main_server.elf ./src/main_server.cpp
-g++ -std=c++23 -o ./bin/main_client.elf ./src/main_client.cpp
-
-build, O2:
-g++ -std=c++23 -O2 -o ./bin/main_server.elf ./src/main_server.cpp
-g++ -std=c++23 -O2 -o ./bin/main_client.elf ./src/main_client.cpp
-
-run:
-./bin/main_server.elf 3490
-./bin/main_client.elf 3490
+# cpp_http-server
+a minimal http server in c++
