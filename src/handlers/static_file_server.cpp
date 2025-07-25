@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include "../http_structs.cpp"
@@ -9,109 +10,136 @@
 
 /*
 TODO:
-- FIX: cant PUT files into a directory that doesnt exist.
-	ideally (with a config setting), the server should be able to create
-	required parent directories as long as they are safe (i.e. within prefix directory).
-	(this will likely require improvements to related function in "file_io.cpp")
+- convert prefix directory to absolute directory during init.
+- throw error during init if trying to use prefix-directory that doesnt exist.
+- add setting can_create_directories (default=false) to control
+	whether or not a write operation is allowed to create directories,
+	or if it should throw when parent directory of file to write does not exist.
+- add setting can_remove_directories (default=false), similar to above.
 ...
+
 */
 namespace HTTP::Handlers::static_file_server {
 	using std::string;
+	namespace fio = utils::file_io;
 	namespace fs = std::filesystem;
 	using fs::path;
-	namespace fio = utils::file_io;
 
-	struct config {
-		// prefix to append to target filepaths.
-		// requested files should be inside this directory.
-		path prefix;
+	struct static_file_server_config {
+		string prefix = "";// prefix to append to target filepaths.
+		// NOTE: not implemented (yet).
+		//bool can_create_directories = false;
+		//bool can_remove_directories = false;
 	};
 
-	http_response handle_request(const http_request& request, const config& conf) {
-		http_response response;
+	struct static_file_server_struct {
+		static_file_server_config config;
+		path prefix_canonical;
 
-		// by default no content is returned (overwrite header as needed).
-		response.headers[HTTP::HEADERS::content_length] = "0";
-
-		// get target file path.
-		path target;
-		if(request.target == "/") {
-			target = path(conf.prefix / "index.html");
-		} else {
-			string str = request.target;
-			if(str.starts_with("/")) str = str.substr(1);
-			target = path(conf.prefix / str);
+		static_file_server_struct(static_file_server_config config) {
+			printf("[static_file_server_struct] prefix=%s\n", config.prefix.c_str());
+			prefix_canonical = fs::weakly_canonical(config.prefix);
+			printf("[static_file_server_struct] prefix_canonical=%s\n", prefix_canonical.c_str());
+			if(!fs::exists(prefix_canonical)) {
+				fprintf(stderr, "prefix does not exist.\n");
+				exit(EXIT_FAILURE);
+			}
+			if(!fs::is_directory(prefix_canonical)) {
+				fprintf(stderr, "prefix is not a directory.\n");
+				exit(EXIT_FAILURE);
+			}
 		}
 
-		// security: ensure target file is within prefix directory.
-		{
-			bool is_safe = fio::is_target_file_within_directory(conf.prefix, target, true);
-			if(!is_safe) {
-				response.status_code = 404;
-				return response;
+		int handle_request(const http_request& request, http_response& response) {
+			// by default no content is returned (overwrite header as needed).
+			response.headers[HTTP::HEADERS::content_length] = "0";
+
+			// modify target file path.
+			path target;
+			if(request.target == "/") {
+				target = path(prefix_canonical / "index.html");
 			} else {
-				printf("\ttarget: %s\n", target.c_str());
+				string str = request.target;
+				if(str.starts_with("/")) str = str.substr(1);
+				target = path(prefix_canonical / str);
 			}
-		}
 
-		if(request.method == HTTP::METHODS::GET) {
-			if(!fio::can_read_file(target)) {
-				response.status_code = 404;
-				return response;
+			// SECURITY: ensure target file is both valid and within prefix directory.
+			std::error_code ec;
+			path target_canonical = fs::weakly_canonical(target, ec);
+			if(ec) {
+				fprintf(stderr, "%s\n", ec.message().c_str());
+				return 500;
 			}
-			int status;
-			const string content = fio::read_file(target, status);
-			if(status == 0) {
-				response.status_code = 200;
+			bool is_within_directory =
+				target_canonical.string().starts_with(prefix_canonical.string()) &&
+				target_canonical.string().length() > prefix_canonical.string().length();
+			if(!is_within_directory) {
+				fprintf(stderr, "[SECURITY] target is not within prefix directory!\n\tprefix=%s\n\ttarget=%s\n", prefix_canonical.c_str(), target_canonical.c_str());
+				return 404;
+			}
+			target = target_canonical;
+
+			// ============================================================
+			// request methods.
+			// ------------------------------------------------------------
+
+			if(request.method == HTTP::METHODS::GET) {
+				bool can_read_file = fs::exists(target) && fs::is_regular_file(target);
+				if(!can_read_file) return 404;
+				int status;
+				const string content = fio::read_file(target, status);
+				if(status != 0) return 500;
 				response.body = content;
-				// set content type.
 				string ext = target.extension();
 				response.headers[HTTP::HEADERS::content_type] = get_mime_type(ext);
 				response.headers[HTTP::HEADERS::content_length] = int_to_string(content.length());
-				return response;
-			} else {
-				response.status_code = 500;
-				return response;
+				return 200;
 			}
+
+			if(request.method == HTTP::METHODS::PUT) {
+				const bool can_write_file = fs::is_directory(target.parent_path()) && (!fs::exists(target) || fs::is_regular_file(target));
+				if(!can_write_file) return 405;
+				int status;
+				bool file_exists = fs::is_regular_file(target);
+				fio::write_file(target, status, request.body.data(), request.body.size());
+				return (status != 0) ? 500 : (file_exists ? 204 : 201);
+			}
+
+			if(request.method == HTTP::METHODS::DELETE) {
+				const bool can_delete_file = fs::exists(target) && fs::is_regular_file(target);
+				if(!can_delete_file) return 404;
+				int status;
+				fio::delete_file(target, status);
+				return (status != 0) ? 500 : 204;
+			}
+
+			return 501;
 		}
 
-		if(request.method == HTTP::METHODS::PUT) {
-			if(!fio::can_write_file(target)) {
-				response.status_code = 403;
-				return response;
-			}
-			int status;
-			bool file_exists = fs::is_regular_file(target);
-			fio::write_file(target, status, request.body.data(), request.body.size());
-			response.status_code = (status != 0) ? 500 : (file_exists ? 204 : 201);
-			return response;
-		}
-
-		if(request.method == HTTP::METHODS::DELETE) {
-			if(!fio::can_delete_file(target)) {
-				response.status_code = 404;
-				return response;
-			}
-			int status;
-			fio::delete_file(target, status);
-			response.status_code = (status != 0) ? 500 : 204;
-			return response;
-		}
-
-		response.status_code = 501;
-		return response;
-	}
+	};
 
 	// example server.
 	struct HTTPFileServer : HTTP::HTTPServer {
-		config conf;
+		static_file_server_struct sfs;
 
-		HTTPFileServer(const char* hostname, const char* portname, config conf) : HTTPServer(hostname, portname) {
-			this->conf = conf;
-		}
+		HTTPFileServer(const char* hostname, const char* portname, static_file_server_config config) : HTTPServer(hostname, portname), sfs(config) {}
 
 		ERROR_CODE handle_request(const accept_connection_struct& connection, http_request& request, http_response& response) override {
-			response = static_file_server::handle_request(request, conf);
+
+			http_response resp;
+			resp.status_code = sfs.handle_request(request, resp);
+			response = resp;
+			printf("[response] method=%s, status=%i, ip=%s, target=%s, reqlen=%lu+%lu, reslen=%lu\n",
+				request.method.c_str(),
+				response.status_code,
+				request.ipstr.c_str(),
+				request.target.c_str(),
+				request.head.length(),
+				request.body.length(),
+				response.body.length()
+			);
+
 			return ERROR_CODE::SUCCESS;
 		}
 	};

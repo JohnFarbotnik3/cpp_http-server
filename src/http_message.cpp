@@ -4,13 +4,14 @@
 #include <string>
 #include <sys/socket.h>
 #include "./http_structs.cpp"
-#include "./utils/string_helpers.cpp"
-#include "./definitions/headers.cpp"
-#include "./definitions/status_codes.cpp"
+#include "src/utils/string_util.cpp"
+#include "src/definitions/headers.cpp"
+#include "src/definitions/status_codes.cpp"
 
 namespace HTTP {
 	using std::string;
 	using std::string_view;
+	using namespace utils::string_util;
 
 	enum ERROR_CODE {
 		SUCCESS = 0,

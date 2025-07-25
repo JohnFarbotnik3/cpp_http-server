@@ -25,6 +25,14 @@ namespace HTTP {
 
 		// image
 		{".png"	, "image/png"},
+		{".jpg"	, "image/jpeg"},
+		{".jpeg", "image/jpeg"},
+		{".webp", "image/webp"},
+		{".svg"	, "image/svg"},
+		{".gif"	, "image/gif"},
+		{".avif", "image/avif"},
+		{".tiff", "image/tiff"},
+		{".bmp"	, "image/bmp"},
 	});
 
 	std::string get_mime_type(const std::string ext) {

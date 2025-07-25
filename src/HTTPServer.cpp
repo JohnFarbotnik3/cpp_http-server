@@ -40,6 +40,9 @@ namespace HTTP {
 						break;
 					}
 
+					// add extra fields that may help with request processing.
+					request.ipstr = ipstr;
+
 					// generate response.
 					http_response response;
 					err = handle_request(connection, request, response);
