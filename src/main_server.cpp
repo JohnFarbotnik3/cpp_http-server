@@ -18,6 +18,8 @@ int main(const int argc, const char** argv) {
 	const char* portname = argv[1];
 	HTTP::Handlers::static_file_server::static_file_server_config config;
 	config.prefix = "/home/user/Downloads/test";
+	config.can_get_files = true;
+	config.can_put_files = true;
 	HTTP::Handlers::static_file_server::HTTPFileServer server(NULL, portname, config);
 	server.start_listen();
 }

@@ -10,29 +10,53 @@ https://www.iana.org/assignments/media-types/media-types.xhtml
 */
 namespace HTTP {
 	std::map<std::string, std::string> MIME_TYPES({
-		// text
-		{".txt"	, "text/plain; charset=utf-8"},
-		{".html", "text/html"},
-		{".css"	, "text/css"},
-		{".js"	, "text/javascript; charset=utf-8"},
-		{".md"	, "text/markdown"},
-
 		// application
 		{""		, "application/octet-stream"},
 		{".bin"	, "application/octet-stream"},
+		{".http", "application/http"},
 		{".json", "application/json"},
 		{".pdf"	, "application/pdf"},
+		{".sql"	, "application/sql"},
+		{".wasm", "application/wasm"},
+		{".yaml", "application/yaml"},
+		{".zip"	, "application/zip"},
+		{".7z"	, "application/7z"},
+
+		// text
+		{".css"	, "text/css"},
+		{".csv"	, "text/csv"},
+		{".html", "text/html"},
+		{".js"	, "text/javascript; charset=utf-8"},
+		{".md"	, "text/markdown"},
+		{".txt"	, "text/plain; charset=utf-8"},
+		{".xml"	, "text/xml"},
+
+		// font
+		{".otf"	, "font/otf"},
+		{".ttf"	, "font/ttf"},
+		{".woff", "font/woff"},
 
 		// image
-		{".png"	, "image/png"},
+		{".avif", "image/avif"},
+		{".bmp"	, "image/bmp"},
+		{".gif"	, "image/gif"},
 		{".jpg"	, "image/jpeg"},
 		{".jpeg", "image/jpeg"},
-		{".webp", "image/webp"},
+		{".png"	, "image/png"},
 		{".svg"	, "image/svg"},
-		{".gif"	, "image/gif"},
-		{".avif", "image/avif"},
 		{".tiff", "image/tiff"},
-		{".bmp"	, "image/bmp"},
+		{".webp", "image/webp"},
+
+		// video
+		{".av1"	, "video/av1"},
+		{".mp4"	, "video/mp4"},
+		{".ogg"	, "video/ogg"},
+		{".vp8"	, "video/vp8"},
+		{".vp9"	, "video/vp9"},
+
+		// audio
+		{".ogg"	, "audio/ogg"},
+		{".opus", "audio/opus"},
 	});
 
 	std::string get_mime_type(const std::string ext) {

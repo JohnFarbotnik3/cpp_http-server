@@ -27,9 +27,9 @@ namespace HTTP::Handlers::static_file_server {
 
 	struct static_file_server_config {
 		string prefix = "";// prefix to append to target filepaths.
-		// NOTE: not implemented (yet).
-		//bool can_create_directories = false;
-		//bool can_remove_directories = false;
+		bool can_get_files = false;
+		bool can_put_files = false;
+		bool can_delete_files = false;
 	};
 
 	struct static_file_server_struct {
@@ -84,7 +84,7 @@ namespace HTTP::Handlers::static_file_server {
 			// request methods.
 			// ------------------------------------------------------------
 
-			if(request.method == HTTP::METHODS::GET) {
+			if(config.can_get_files && request.method == HTTP::METHODS::GET) {
 				bool can_read_file = fs::exists(target) && fs::is_regular_file(target);
 				if(!can_read_file) return 404;
 				int status;
@@ -97,7 +97,7 @@ namespace HTTP::Handlers::static_file_server {
 				return 200;
 			}
 
-			if(request.method == HTTP::METHODS::PUT) {
+			if(config.can_put_files && request.method == HTTP::METHODS::PUT) {
 				const bool can_write_file = fs::is_directory(target.parent_path()) && (!fs::exists(target) || fs::is_regular_file(target));
 				if(!can_write_file) return 405;
 				int status;
@@ -106,7 +106,7 @@ namespace HTTP::Handlers::static_file_server {
 				return (status != 0) ? 500 : (file_exists ? 204 : 201);
 			}
 
-			if(request.method == HTTP::METHODS::DELETE) {
+			if(config.can_delete_files && request.method == HTTP::METHODS::DELETE) {
 				const bool can_delete_file = fs::exists(target) && fs::is_regular_file(target);
 				if(!can_delete_file) return 404;
 				int status;
