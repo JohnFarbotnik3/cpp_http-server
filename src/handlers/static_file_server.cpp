@@ -37,6 +37,7 @@ namespace HTTP::Handlers::static_file_server {
 		path prefix_canonical;
 
 		static_file_server_struct(static_file_server_config config) {
+			this->config = config;
 			printf("[static_file_server_struct] prefix=%s\n", config.prefix.c_str());
 			prefix_canonical = fs::weakly_canonical(config.prefix);
 			printf("[static_file_server_struct] prefix_canonical=%s\n", prefix_canonical.c_str());
@@ -84,16 +85,18 @@ namespace HTTP::Handlers::static_file_server {
 			// request methods.
 			// ------------------------------------------------------------
 
-			if(config.can_get_files && request.method == HTTP::METHODS::GET) {
+			const bool method_get = request.method == HTTP::METHODS::GET;
+			const bool method_head = request.method == HTTP::METHODS::HEAD;
+			if(config.can_get_files && (method_get || method_head)) {
 				bool can_read_file = fs::exists(target) && fs::is_regular_file(target);
 				if(!can_read_file) return 404;
 				int status;
 				const string content = fio::read_file(target, status);
 				if(status != 0) return 500;
-				response.body = content;
 				string ext = target.extension();
 				response.headers[HTTP::HEADERS::content_type] = get_mime_type(ext);
-				response.headers[HTTP::HEADERS::content_length] = int_to_string(content.length());
+				if(method_get) response.headers[HTTP::HEADERS::content_length] = int_to_string(content.length());
+				if(method_get) response.body = content;
 				return 200;
 			}
 
