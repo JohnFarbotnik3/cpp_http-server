@@ -1,25 +1,33 @@
 //#include "./HTTPServer.cpp"
-#include "./handlers/static_file_server.cpp"
 #include <cstdio>
 #include <cstdlib>
+#include "src/utils/commandline.cpp"
+#include "./handlers/static_file_server.cpp"
+
+using std::string;
+using HTTP::Handlers::static_file_server::static_file_server_config;
 
 /*
 build:
 g++ -std=c++23 -O2 -I "./" -o "./bin/main_server.elf" "./src/main_server.cpp"
 
 run:
-./bin/main_server.elf 5000
+./bin/main_server.elf -port 5000 -config_fileserver "./config/config_static-file-server.conf"
 
 */
 
 int main(const int argc, const char** argv) {
-	if(argc <= 1) printf("missing arg[1]: portname (string)\n");
-	if(argc <= 1) exit(1);
-	const char* portname = argv[1];
-	HTTP::Handlers::static_file_server::static_file_server_config config;
-	config.prefix = "/home/user/Downloads/test";
-	config.can_get_files = true;
-	config.can_put_files = true;
-	HTTP::Handlers::static_file_server::HTTPFileServer server(NULL, portname, config);
+	utils::commandline::cmd_arguments args(argc, argv);
+	std::vector<string> required{ "-port", "-config_fileserver" };
+	for(const string& key : required) {
+		if(!args.named_arguments.contains(key)) {
+			printf("missing argument: %s\n", key.c_str());
+			exit(EXIT_FAILURE);
+		}
+	}
+	const string portname = args.named_arguments.at("-port");
+	int status = 0;
+	static_file_server_config config = static_file_server_config::from_config(utils::config_util::parse_file(args.named_arguments.at("-config_fileserver"), status));
+	HTTP::Handlers::static_file_server::HTTPFileServer server(NULL, portname.c_str(), config);
 	server.start_listen();
 }

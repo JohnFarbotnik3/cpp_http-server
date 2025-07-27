@@ -7,6 +7,7 @@
 #include "../definitions/mime_types.cpp"
 #include "../HTTPServer.cpp"
 #include "../utils/file_io.cpp"
+#include "src/utils/config_util.cpp"
 
 /*
 TODO:
@@ -30,6 +31,15 @@ namespace HTTP::Handlers::static_file_server {
 		bool can_get_files = false;
 		bool can_put_files = false;
 		bool can_delete_files = false;
+
+		static static_file_server_config from_config(std::map<string, string> pairs) {
+			static_file_server_config config;
+			if(pairs.contains("prefix")) config.prefix = utils::config_util::parse_string(pairs.at("prefix"));
+			if(pairs.contains("can_get_files")) config.can_get_files = utils::config_util::parse_bool(pairs.at("can_get_files"));
+			if(pairs.contains("can_put_files")) config.can_put_files = utils::config_util::parse_bool(pairs.at("can_put_files"));
+			if(pairs.contains("can_delete_files")) config.can_delete_files = utils::config_util::parse_bool(pairs.at("can_delete_files"));
+			return config;
+		}
 	};
 
 	struct static_file_server_struct {
@@ -94,7 +104,8 @@ namespace HTTP::Handlers::static_file_server {
 
 			const bool method_get = request.method == HTTP::METHODS::GET;
 			const bool method_head = request.method == HTTP::METHODS::HEAD;
-			if(config.can_get_files && (method_get || method_head)) {
+			if(method_get || method_head) {
+				if(!config.can_get_files) return return_status(response, 403);
 				bool can_read_file = fs::exists(target) && fs::is_regular_file(target);
 				if(!can_read_file) return return_status(response, 404);
 				int status;
@@ -107,7 +118,8 @@ namespace HTTP::Handlers::static_file_server {
 				return return_status(response, 200);
 			}
 
-			if(config.can_put_files && request.method == HTTP::METHODS::PUT) {
+			if(request.method == HTTP::METHODS::PUT) {
+				if(!config.can_put_files) return return_status(response, 403);
 				const bool can_write_file = fs::is_directory(target.parent_path()) && (!fs::exists(target) || fs::is_regular_file(target));
 				if(!can_write_file) return return_status(response, 405);
 				int status;
@@ -116,7 +128,8 @@ namespace HTTP::Handlers::static_file_server {
 				return return_status(response, (status != 0) ? 500 : (file_exists ? 204 : 201));
 			}
 
-			if(config.can_delete_files && request.method == HTTP::METHODS::DELETE) {
+			if(request.method == HTTP::METHODS::DELETE) {
+				if(!config.can_delete_files) return return_status(response, 403);
 				const bool can_delete_file = fs::exists(target) && fs::is_regular_file(target);
 				if(!can_delete_file) return return_status(response, 404);
 				int status;
