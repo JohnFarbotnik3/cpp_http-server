@@ -7,11 +7,13 @@
 #include "src/utils/string_util.cpp"
 #include "src/definitions/headers.cpp"
 #include "src/definitions/status_codes.cpp"
+#include "src/utils/time_util.cpp"
 
 namespace HTTP {
 	using std::string;
 	using std::string_view;
 	using namespace utils::string_util;
+	using utils::time_util::timepoint_64_ns;
 
 	enum ERROR_CODE {
 		SUCCESS = 0,
@@ -261,26 +263,35 @@ namespace HTTP {
 
 		return ERROR_CODE::SUCCESS;
 	}
-	ERROR_CODE recv_http_request(const int fd, http_request& request, string& buffer) {
+	ERROR_CODE recv_http_request(const int fd, http_request& request, string& buffer, timepoint_64_ns& dt_us_wait, timepoint_64_ns& dt_us_work) {
 		string& head = request.head;
 		string& body = request.body;
 		ERROR_CODE err;
+		timepoint_64_ns t0;
 
 		if(buffer.capacity() > BUFFER_SHRINK_THRESHOLD) buffer.shrink_to_fit();
 
+		t0 = timepoint_64_ns::now();
 		err = recv_message_head(fd, buffer, head);
+		dt_us_wait.value += timepoint_64_ns::now().delta(t0).value;
 		if(err != ERROR_CODE::SUCCESS) return err;
 
+		t0 = timepoint_64_ns::now();
 		err = parse_request_start(head, request);
+		dt_us_work.value += timepoint_64_ns::now().delta(t0).value;
 		if(err != ERROR_CODE::SUCCESS) return err;
 
+		t0 = timepoint_64_ns::now();
 		err = parse_header_lines(head, request.headers);
+		dt_us_work.value += timepoint_64_ns::now().delta(t0).value;
 		if(err != ERROR_CODE::SUCCESS) return err;
 
 		// receive message body (if any).
 		if(request.headers.contains(HTTP::HEADERS::content_length)) {
 			size_t content_length = string_to_int(request.headers.at(HTTP::HEADERS::content_length));
+			t0 = timepoint_64_ns::now();
 			err = recv_message_body(fd, buffer, body, content_length);
+			dt_us_wait.value += timepoint_64_ns::now().delta(t0).value;
 			if(err != ERROR_CODE::SUCCESS) return err;
 		}
 

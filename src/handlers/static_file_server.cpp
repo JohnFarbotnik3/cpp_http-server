@@ -51,7 +51,14 @@ namespace HTTP::Handlers::static_file_server {
 			}
 		}
 
-		int handle_request(const http_request& request, http_response& response) {
+		http_response& return_status(http_response& response, const int status) {
+			response.status_code = status;
+			return response;
+		}
+
+		http_response handle_request(const http_request& request) {
+			http_response response;
+
 			// by default no content is returned (overwrite header as needed).
 			response.headers[HTTP::HEADERS::content_length] = "0";
 
@@ -70,14 +77,14 @@ namespace HTTP::Handlers::static_file_server {
 			path target_canonical = fs::weakly_canonical(target, ec);
 			if(ec) {
 				fprintf(stderr, "%s\n", ec.message().c_str());
-				return 500;
+				return return_status(response, 500);
 			}
 			bool is_within_directory =
 				target_canonical.string().starts_with(prefix_canonical.string()) &&
 				target_canonical.string().length() > prefix_canonical.string().length();
 			if(!is_within_directory) {
 				fprintf(stderr, "[SECURITY] target is not within prefix directory!\n\tprefix=%s\n\ttarget=%s\n", prefix_canonical.c_str(), target_canonical.c_str());
-				return 404;
+				return return_status(response, 404);
 			}
 			target = target_canonical;
 
@@ -89,35 +96,35 @@ namespace HTTP::Handlers::static_file_server {
 			const bool method_head = request.method == HTTP::METHODS::HEAD;
 			if(config.can_get_files && (method_get || method_head)) {
 				bool can_read_file = fs::exists(target) && fs::is_regular_file(target);
-				if(!can_read_file) return 404;
+				if(!can_read_file) return return_status(response, 404);
 				int status;
 				const string content = fio::read_file(target, status);
-				if(status != 0) return 500;
+				if(status != 0) return return_status(response, 500);
 				string ext = target.extension();
 				response.headers[HTTP::HEADERS::content_type] = get_mime_type(ext);
 				if(method_get) response.headers[HTTP::HEADERS::content_length] = int_to_string(content.length());
 				if(method_get) response.body = content;
-				return 200;
+				return return_status(response, 200);
 			}
 
 			if(config.can_put_files && request.method == HTTP::METHODS::PUT) {
 				const bool can_write_file = fs::is_directory(target.parent_path()) && (!fs::exists(target) || fs::is_regular_file(target));
-				if(!can_write_file) return 405;
+				if(!can_write_file) return return_status(response, 405);
 				int status;
 				bool file_exists = fs::is_regular_file(target);
 				fio::write_file(target, status, request.body.data(), request.body.size());
-				return (status != 0) ? 500 : (file_exists ? 204 : 201);
+				return return_status(response, (status != 0) ? 500 : (file_exists ? 204 : 201));
 			}
 
 			if(config.can_delete_files && request.method == HTTP::METHODS::DELETE) {
 				const bool can_delete_file = fs::exists(target) && fs::is_regular_file(target);
-				if(!can_delete_file) return 404;
+				if(!can_delete_file) return return_status(response, 404);
 				int status;
 				fio::delete_file(target, status);
-				return (status != 0) ? 500 : 204;
+				return return_status(response, (status != 0) ? 500 : 204);
 			}
 
-			return 501;
+			return return_status(response, 501);
 		}
 
 	};
@@ -128,22 +135,8 @@ namespace HTTP::Handlers::static_file_server {
 
 		HTTPFileServer(const char* hostname, const char* portname, static_file_server_config config) : HTTPServer(hostname, portname), sfs(config) {}
 
-		ERROR_CODE handle_request(const accept_connection_struct& connection, http_request& request, http_response& response) override {
-
-			http_response resp;
-			resp.status_code = sfs.handle_request(request, resp);
-			response = resp;
-			printf("[response] method=%s, status=%i, ip=%s, target=%s, reqlen=%lu+%lu, reslen=%lu\n",
-				request.method.c_str(),
-				response.status_code,
-				request.ipstr.c_str(),
-				request.target.c_str(),
-				request.head.length(),
-				request.body.length(),
-				response.body.length()
-			);
-
-			return ERROR_CODE::SUCCESS;
+		http_response handle_request(const accept_connection_struct& connection, const http_request& request) override {
+			return sfs.handle_request(request);
 		}
 	};
 }

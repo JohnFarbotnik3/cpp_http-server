@@ -22,8 +22,6 @@ namespace HTTP {
 		string		protocol;
 		// headers.
 		header_dict	headers;
-		// extra stuff.
-		string		ipstr;
 	};
 
 	struct http_response {
