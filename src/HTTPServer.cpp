@@ -41,7 +41,7 @@ namespace HTTP {
 				string ipstr =  get_address_string(connection.addr, connection.addrlen);
 				printf("accepted HTTP connection | fd: %i, addr: %s\n", fd, ipstr.c_str());
 
-				string buffer;
+				HeadBuffer head_buffer;
 				while(true) {
 					timepoint_64_ns t0;
 
@@ -49,7 +49,7 @@ namespace HTTP {
 					http_request request;
 					timepoint_64_ns dt_recv_wait;
 					timepoint_64_ns dt_recv_work;
-					ERROR_CODE err = recv_http_request(fd, request, buffer, dt_recv_wait, dt_recv_work);
+					ERROR_CODE err = recv_http_request(fd, request, head_buffer, dt_recv_wait, dt_recv_work);
 					if(err != ERROR_CODE::SUCCESS) {
 						fprintf(stderr, "error during recv_http_request(): %s\n", ERROR_MESSAGE.at(err).c_str());
 						fprintf(stderr, "errno: %s\n", strerror(errno));

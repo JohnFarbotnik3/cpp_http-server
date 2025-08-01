@@ -113,7 +113,7 @@ namespace HTTP::Handlers::static_file_server {
 				if(status != 0) return return_status(response, 500);
 				string ext = target.extension();
 				response.headers[HTTP::HEADERS::content_type] = get_mime_type(ext);
-				if(method_get) response.headers[HTTP::HEADERS::content_length] = int_to_string(content.length());
+				response.headers[HTTP::HEADERS::content_length] = int_to_string(content.length());
 				if(method_get) response.body = content;
 				return return_status(response, 200);
 			}

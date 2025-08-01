@@ -18,15 +18,14 @@ namespace HTTP {
 	struct HTTPClient : TCPClient {
 		HTTPClient(): TCPClient() {}
 
-		ERROR_CODE fetch(http_request& request, http_response& response) {
+		ERROR_CODE fetch(http_request& request, http_response& response, HeadBuffer& head_buffer) {
 			const int sockfd = this->connection_info.sockfd;
 			ERROR_CODE err;
 
 			err = send_http_request(sockfd, request);
 			if(err != ERROR_CODE::SUCCESS) return err;
 
-			string buffer;
-			err = recv_http_response(sockfd, response, buffer);
+			err = recv_http_response(sockfd, response, head_buffer);
 			if(err != ERROR_CODE::SUCCESS) return err;
 
 			return ERROR_CODE::SUCCESS;

@@ -7,37 +7,51 @@ including when pipelining.
 would be an easy way to do this.
 
 
-> recursively <chown> git directory to try and make it easier to copy and archive.
-
-
-> figure out how hard it is to make server capable of basic HTTPS (self-signed),
-for purposes of more secure local use. (SSL/TLS)
-
-
-> config
-- some handlers should have a config struct, containing info loaded from config files.
-
-
-> logging
-- start logging stuff to file (in format: "[debug-level] TEXT ABC 123")
-
-
 > HTTP handlers
 * first create a simple static file-server, and experiment with cache behaviour.
 * then try to create a simple request proxying server to replace current NodeJS proxy implementation.
 	- will require writing an HTTPClient, so that the server can also act as a client.
 	- try to mirror the state of the connections between client-side and server-side.
 * also try creating an SQLite server with database behaviour.
-* then start working on ML projects and interfacing them with the browser.
 
 
 > create combined server for ff-extensions
-- will require multiple features/handlers under the same umbrella:
+- will require multiple features/handlers (likely as separate servers):
 	- sqlite DB (ex: for storing maps of form: Map<db_name, Map<post_id, post_json>>)
-	- file get/put (ex: for thumbnails)
+		^ target = "localhost:xxxx/dbname"
+		^ method = "GET|PUT|DELETE"
+		^ HTTPS + password authenticated (using cookie?).
+	- caching proxy
+		^ target = "localhost:yyyy/URI"
+		^ custom header = "x-cachemode: file_cache|temp_cache|no_cache"
+		^ config: file_cache_dir, temp_cache_dir.
 	- ML service (ex: for processing thumbnail + post_json)
-		^ map from {thumbnail, one-hot-tags-encoding} to {estimated_post_score}
-- sqlite DB and file get/put can likely be done under the base HTTP-server project in "handlers" folder.
-
+		^ target = "localhost:zzzz/compute_score"
+		^ method = "POST"
+		^ map from {thumbnail + one-hot-tags-encoding} to {estimated_post_score}
+		^ score encoder model can be trained externally with a separate interface.
+		^ training data: thumbnails with json metadata sorted into folders "0, 10, 20, ..., 90, 100"
 ...
+
+> implement CORS related stuff:
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy#directives
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Permissions-Policy#directives
+
+> figure out how hard it is to make server capable of basic HTTPS (self-signed),
+for purposes of more secure local use. (SSL/TLS)
+- steps:
+	- download openSSL source.
+	- build source into library. (learn how to do this)
+	- link project against library. (learn how to do this)
+	? statically linked or dynamically linked?
+	? is libCURL needed here?
+...
+
+> add support for ranges in GET/HEAD requests.
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Range_requests
+
+
+
+
+
 

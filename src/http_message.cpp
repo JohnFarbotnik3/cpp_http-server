@@ -49,61 +49,72 @@ namespace HTTP {
 
 	const string	HTTP_HEADER_NEWLINE	= "\r\n";
 	const string	HTTP_HEADER_END		= "\r\n\r\n";
-	const size_t	MAX_HEAD_LENGTH = 1024 * 10;// 10 KiB
-	const size_t	MAX_BODY_LENGTH = 1024 * 1024 * 1024;// 1 GiB
-	const size_t	BUFFER_SHRINK_THRESHOLD = 1024 * 1024;
+	const size_t	MAX_HEAD_LENGTH = 1024 * 16;// 16 KiB
+	const size_t	MAX_BODY_LENGTH = 1024 * 1024 * 128;// 128 MiB
 
-	ERROR_CODE recv_message_head(int fd, string& buffer, string& head) {
-		size_t scan_start = 0;
+	struct HeadBuffer {
+		char* data;
+		size_t length;
+
+		HeadBuffer() {
+			data = new char[MAX_HEAD_LENGTH];
+			length = 0;
+		}
+		~HeadBuffer() {
+			delete[] data;
+		}
+
+		size_t find(const string& str, const size_t pos) {
+			return string_view(data, length).find(str, pos);
+		}
+
+		string extract(const size_t n) {
+			const string dst = string(data, n);
+			memmove(data, data+n, length-n);
+			length -= n;
+			return dst;
+		}
+	};
+	ERROR_CODE recv_message_head(int fd, HeadBuffer& head_buffer, string& head) {
+		size_t scan_pos = 0;
 		while(true) {
 			// check for end of headers.
-			if(buffer.length() > HTTP_HEADER_END.length()) {
-				size_t pos = buffer.find(HTTP_HEADER_END, scan_start);
-				if(pos != string::npos) {
-					size_t len = pos + HTTP_HEADER_END.length();
-					head = buffer.substr(0, len);
-					buffer = buffer.substr(len);
+			if(head_buffer.length >= HTTP_HEADER_END.length()) {
+				const size_t end_pos = head_buffer.find(HTTP_HEADER_END, scan_pos);
+				if(end_pos != string::npos) {
+					const size_t head_len = end_pos + HTTP_HEADER_END.length();
+					head = head_buffer.extract(head_len);
 					return ERROR_CODE::SUCCESS;
 				} else {
-					// move scan start to (near) end of buffer, leaving some padding in case
-					// only part of end-of-header was received during previous iteration.
-					scan_start = buffer.length() - HTTP_HEADER_END.length();
+					scan_pos = head_buffer.length - HTTP_HEADER_END.length();
 				}
 			}
 			// check if max length exceeded.
-			if(buffer.length() > MAX_HEAD_LENGTH) return ERROR_CODE::ERR_MAXLEN_HEAD;
-			// read some more data.
-			char temp[1024];
-			ssize_t len = recv(fd, temp, 1024, 0);
+			if(head_buffer.length >= MAX_HEAD_LENGTH) return ERROR_CODE::ERR_MAXLEN_HEAD;
+			// read some data.
+			const size_t count = MAX_HEAD_LENGTH - head_buffer.length;
+			const ssize_t len = recv(fd, head_buffer.data + head_buffer.length, count, 0);
 			if(len == 0) return ERROR_CODE::RECV_CLOSED_DURING_HEAD;
 			if(len <  0) return ERROR_CODE::RECV_ERROR_DURING_HEAD;
-			buffer.append(temp, len);
+			head_buffer.length += len;
 		}
 		return ERROR_CODE::UNKNOWN_ERROR;
 	}
-	ERROR_CODE recv_message_body(int fd, string& buffer, string& body, const size_t content_length) {
+	ERROR_CODE recv_message_body(int fd, HeadBuffer& head_buffer, string& body, const size_t content_length) {
 		// check if content length is within bounds.
 		if(content_length > MAX_BODY_LENGTH) return ERROR_CODE::ERR_MAXLEN_BODY;
-		// check if body has already been read into buffer.
-		// NOTE: in theory, the buffer is currently small so this isnt very expensive.
-		if(buffer.length() >= content_length) {
-			body = buffer.substr(0, content_length);
-			buffer = buffer.substr(content_length);
-			return ERROR_CODE::SUCCESS;
-		}
-		// read rest of content.
-		// NOTE: it is read directly into body to avoid expensive allocate+copy on large content.
-		body = buffer;
-		buffer.resize(0);
-		body.reserve(content_length);
-		while(body.length() < content_length) {
-			char temp[8192];
-			size_t remaining = content_length - body.length();
-			size_t count = std::min<size_t>(remaining, 8192);
-			ssize_t len = recv(fd, temp, count, 0);
+		// get body content that may have already been read into head_buffer.
+		body = head_buffer.extract(std::min<size_t>(content_length, head_buffer.length));
+		// allocate memory for content. NOTE: string::resize() also zero-fills memory.
+		size_t read_sum = body.length();
+		body.resize(content_length);// WARNING: easy DOS method - spawn many connections with large content length.
+		// read content.
+		while(read_sum < content_length) {
+			size_t count = content_length - read_sum;
+			ssize_t len = recv(fd, body.data()+read_sum, count, 0);
 			if(len == 0) return ERROR_CODE::RECV_CLOSED_DURING_BODY;
 			if(len <  0) return ERROR_CODE::RECV_ERROR_DURING_BODY;
-			body.append(temp, len);
+			read_sum += len;
 		}
 		return ERROR_CODE::SUCCESS;
 	}
@@ -263,16 +274,14 @@ namespace HTTP {
 
 		return ERROR_CODE::SUCCESS;
 	}
-	ERROR_CODE recv_http_request(const int fd, http_request& request, string& buffer, timepoint_64_ns& dt_us_wait, timepoint_64_ns& dt_us_work) {
+	ERROR_CODE recv_http_request(const int fd, http_request& request, HeadBuffer& head_buffer, timepoint_64_ns& dt_us_wait, timepoint_64_ns& dt_us_work) {
 		string& head = request.head;
 		string& body = request.body;
 		ERROR_CODE err;
 		timepoint_64_ns t0;
 
-		if(buffer.capacity() > BUFFER_SHRINK_THRESHOLD) buffer.shrink_to_fit();
-
 		t0 = timepoint_64_ns::now();
-		err = recv_message_head(fd, buffer, head);
+		err = recv_message_head(fd, head_buffer, head);
 		dt_us_wait.value += timepoint_64_ns::now().delta(t0).value;
 		if(err != ERROR_CODE::SUCCESS) return err;
 
@@ -290,21 +299,19 @@ namespace HTTP {
 		if(request.headers.contains(HTTP::HEADERS::content_length)) {
 			size_t content_length = string_to_int(request.headers.at(HTTP::HEADERS::content_length));
 			t0 = timepoint_64_ns::now();
-			err = recv_message_body(fd, buffer, body, content_length);
+			err = recv_message_body(fd, head_buffer, body, content_length);
 			dt_us_wait.value += timepoint_64_ns::now().delta(t0).value;
 			if(err != ERROR_CODE::SUCCESS) return err;
 		}
 
 		return ERROR_CODE::SUCCESS;
 	}
-	ERROR_CODE recv_http_response(const int fd, http_response& response, string& buffer) {
+	ERROR_CODE recv_http_response(const int fd, http_response& response, HeadBuffer& head_buffer) {
 		string& head = response.head;
 		string& body = response.body;
 		ERROR_CODE err;
 
-		if(buffer.capacity() > BUFFER_SHRINK_THRESHOLD) buffer.shrink_to_fit();
-
-		err = recv_message_head(fd, buffer, head);
+		err = recv_message_head(fd, head_buffer, head);
 		if(err != ERROR_CODE::SUCCESS) return err;
 
 		err = parse_response_start(head, response);
@@ -316,7 +323,7 @@ namespace HTTP {
 		// receive message body (if any).
 		if(response.headers.contains(HTTP::HEADERS::content_length)) {
 			size_t content_length = string_to_int(response.headers.at(HTTP::HEADERS::content_length));
-			err = recv_message_body(fd, buffer, body, content_length);
+			err = recv_message_body(fd, head_buffer, body, content_length);
 			if(err != ERROR_CODE::SUCCESS) return err;
 		}
 

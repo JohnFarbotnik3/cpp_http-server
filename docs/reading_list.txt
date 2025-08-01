@@ -1,6 +1,37 @@
 
-https://github.com/nghttp2/nghttp2
+---
+https://developer.mozilla.org/en-US/docs/Web/HTTP
+---
 https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Range_requests
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Caching
+---
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Authentication
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Cookies
+https://www.jwt.io/
+---
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Compression
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Redirections
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Conditional_requests
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Content_negotiation
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Connection_management_in_HTTP_1.x
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Protocol_upgrade_mechanism
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Proxy_servers_and_tunneling
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Client_hints
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Browser_detection_using_the_user_agent
+---
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Permissions_Policy
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Cross-Origin_Resource_Policy
+https://infosec.mozilla.org/guidelines/web_security
+---
+https://developer.mozilla.org/en-US/docs/Web/URI
+https://developer.mozilla.org/en-US/observatory
+https://redbot.org/
+https://github.com/nghttp2/nghttp2
+https://github.com/curl/curl
+https://web.dev/articles/howbrowserswork
+---
 
 QUIC protocol
 https://developer.mozilla.org/en-US/docs/Glossary/HTTP

@@ -8,6 +8,9 @@ using std::string;
 using HTTP::Handlers::static_file_server::static_file_server_config;
 
 /*
+debug:
+g++ -std=c++23 -O2 fsanitize=address -I "./" -o "./bin/main_server.elf" "./src/main_server.cpp"
+
 build:
 g++ -std=c++23 -O2 -I "./" -o "./bin/main_server.elf" "./src/main_server.cpp"
 
@@ -28,6 +31,10 @@ int main(const int argc, const char** argv) {
 	const string portname = args.named_arguments.at("-port");
 	int status = 0;
 	static_file_server_config config = static_file_server_config::from_config(utils::config_util::parse_file(args.named_arguments.at("-config_fileserver"), status));
+	if(status) {
+		printf("failed to parse config file.\n");
+		exit(EXIT_FAILURE);
+	}
 	HTTP::Handlers::static_file_server::HTTPFileServer server(NULL, portname.c_str(), config);
 	server.start_listen();
 }
