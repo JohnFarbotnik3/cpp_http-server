@@ -8,7 +8,6 @@ This was written with the help of the following guides:
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/types.h>
-#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -81,67 +80,6 @@ namespace HTTP {
 		return std::string(buf);
 	}
 
-	/*
-	returns number of bytes sent.
-
-	status == 1: message was sent successfully.
-	status == 0: connection closed.
-	status <  0: an error occurred.
-
-	if an error occurred, errno will be set.
-
-	see "send" manpage for more info.
-	*/
-	int send_all(int fd, void* msg, int len, int* status, int flags=0) {
-		int x = 0;
-		while(x < len) {
-			int num_sent = send(fd, (char*)msg+x, len-x, flags);
-			if(num_sent <= 0) {
-				*status = num_sent;
-				return x;
-			}
-			x += num_sent;
-		}
-		*status = 1;
-		return x;
-	}
-
-	/*
-	returns number of bytes received.
-
-	status == 1: message was sent successfully.
-	status == 0: connection closed.
-	status <  0: an error occurred.
-
-	if an error occurred, errno will be set.
-
-	see "recv" manpage for more info.
-	*/
-	int recv_all(int fd, void* msg, int len, int* status, int flags=0) {
-		int x = 0;
-		while(x < len) {
-			int num_recv = recv(fd, (char*)msg+x, len-x, flags);
-			if(num_recv <= 0) {
-				*status = num_recv;
-				return x;
-			}
-			x += num_recv;
-		}
-		*status = 1;
-		return x;
-	}
-
-	void send_int(int fd, int* status, int value) {
-		int net_value = htonl(value);
-		send_all(fd, &net_value, sizeof(net_value), status);
-	}
-
-	int recv_int(int fd, int* status) {
-		int net_value = 0;
-		recv_all(fd, &net_value, sizeof(net_value), status);
-		return ntohl(net_value);
-	}
-
 	// ============================================================
 	// server
 	// ------------------------------------------------------------
@@ -197,7 +135,7 @@ namespace HTTP {
 			// create a socket (returns socket file-descriptor).
 			listenfd = socket(results->ai_family, results->ai_socktype, results->ai_protocol);
 			if(listenfd == -1) {
-				fprintf(stderr, "error: failed to create socket (sockfd: %i)\n", listenfd);
+				fprintf(stderr, "error: failed to create listener socket (sockfd: %i)\n", listenfd);
 				return 1;
 			}
 
@@ -205,10 +143,10 @@ namespace HTTP {
 			int yes = 1;
 			setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
 
-			// bind socket to address+port.
+			// bind listener socket to address+port.
 			int status = bind(listenfd, results->ai_addr, results->ai_addrlen);
 			if(status == -1) {
-				fprintf(stderr, "error: failed to bind socket (errno: %i)\n", errno);
+				fprintf(stderr, "error: failed to bind listener socket (errno: %i)\n", errno);
 				return 1;
 			}
 
@@ -262,57 +200,11 @@ namespace HTTP {
 			close(connection_info.sockfd);
 		}
 		virtual void handle_connection(accept_connection_struct connection_info) {
-			// print info about accepted connection.
 			int sockfd = connection_info.sockfd;
 			string ipstr =  get_address_string(connection_info.addr, connection_info.addrlen);
 			printf("accepted TCP connection\n");
 			printf("\tsockfd: %i\n", sockfd);
 			printf("\tipaddr: %s\n", ipstr.c_str());
-
-			// echo.
-			std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-
-			int status;
-			int msg_length = recv_int(sockfd, &status);
-			printf("message length: %i\n", msg_length);
-
-			const int BUF_SZ = 6;
-			char buf[BUF_SZ + 1];
-			int x = 0;// current read position in message.
-			while(x < msg_length) {
-				// receive message chunk.
-				int recv_len_max = std::min(BUF_SZ, msg_length - x);
-				int recv_len = recv_all(sockfd, buf, recv_len_max, &status);
-				if(status == 0) {
-					printf("recv - connection closed\n");
-					return;
-				}
-				if(status <  0) {
-					printf("recv - error occurred: %i\n", errno);
-					return;
-				}
-				x += recv_len;
-
-				// print message data.
-				buf[recv_len] = 0;// terminate string with 0 for printing.
-				printf("%s\n", buf);
-				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
-				// send message chunk back.
-				int send_len_max = recv_len;
-				int send_len = send_all(sockfd, buf, send_len_max, &status);
-				if(status == 0) {
-					printf("send - connection closed\n");
-					return;
-				}
-				if(status <  0) {
-					printf("send - error occurred: %i\n", errno);
-					return;
-				}
-			}
-			printf("\n");
-
-			std::this_thread::sleep_for(std::chrono::milliseconds(2000));
 		}
 	};
 

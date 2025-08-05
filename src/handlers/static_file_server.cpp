@@ -1,7 +1,6 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string>
-#include "../http_structs.cpp"
 #include "../definitions/methods.cpp"
 #include "../definitions/headers.cpp"
 #include "../definitions/mime_types.cpp"

@@ -9,7 +9,6 @@
 
 #include <string>
 #include "./TCPServer.cpp"
-#include "./http_structs.cpp"
 #include "./http_message.cpp"
 
 namespace HTTP {
@@ -18,14 +17,14 @@ namespace HTTP {
 	struct HTTPClient : TCPClient {
 		HTTPClient(): TCPClient() {}
 
-		ERROR_CODE fetch(http_request& request, http_response& response, HeadBuffer& head_buffer) {
+		ERROR_CODE fetch(http_message& request, http_message& response, HeadBuffer& head_buffer) {
 			const int sockfd = this->connection_info.sockfd;
 			ERROR_CODE err;
 
-			err = send_http_request(sockfd, request);
+			err = send_http_message(sockfd, request, MESSAGE_TYPE::REQUEST);
 			if(err != ERROR_CODE::SUCCESS) return err;
 
-			err = recv_http_response(sockfd, response, head_buffer);
+			err = recv_http_message(sockfd, response, MESSAGE_TYPE::RESPONSE, head_buffer);
 			if(err != ERROR_CODE::SUCCESS) return err;
 
 			return ERROR_CODE::SUCCESS;

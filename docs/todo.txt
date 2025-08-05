@@ -1,18 +1,7 @@
 
 
-> write thorough request tests to ensure stability of server,
-including when pipelining.
-* I replace http_buffer with string, but I've only tested it a little.
-- testing a bunch of GET, PUT, DELETE operations against static_file_server
-would be an easy way to do this.
-
-
-> HTTP handlers
-* first create a simple static file-server, and experiment with cache behaviour.
-* then try to create a simple request proxying server to replace current NodeJS proxy implementation.
-	- will require writing an HTTPClient, so that the server can also act as a client.
-	- try to mirror the state of the connections between client-side and server-side.
-* also try creating an SQLite server with database behaviour.
+> write thorough request tests to ensure stability (and correctness!) of server, including when pipelining.
+- testing a bunch of GET, PUT, DELETE operations against static_file_server would be an easy way to do this.
 
 
 > create combined server for ff-extensions
@@ -33,6 +22,31 @@ would be an easy way to do this.
 		^ training data: thumbnails with json metadata sorted into folders "0, 10, 20, ..., 90, 100"
 ...
 
+
+> implement abuse prevention metrics and mechanisms:
+	- max 24 connections per IPv4.
+	- max 12 connections per IPv6.
+	? max XX connections per IPv4/6 subnet.
+	- max request time: 2s + 1s/200KiB.
+	- max request head size: <MAX>.
+	- max request body size: <MAX>.
+	- max requests per 5sec: <MAX>.
+	- max bandwidth per 10sec: <MAX>.
+	- min request packet size: <MIN>.
+	- max memory per IPv4/subnet.
+	- max memory per IPv6/subnet.
+	- prevent directory-escape.
+	- prevent probing for configs, certs, etc.
+	* respond with rate limiting status.
+	* block IP/IP-subnet for 5-30 minutes on violation.
+	* notify admin on high resource usage: memory usage, connections/file-descriptors, cpu load over time, etc.
+	* have different log levels for different levels of abuse.
+	* have system resource usage logs (1hz), in comma-delimited table format.
+	* implement log rotation.
+...
+
+
+
 > implement CORS related stuff:
 https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy#directives
 https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Permissions-Policy#directives
@@ -49,6 +63,23 @@ for purposes of more secure local use. (SSL/TLS)
 
 > add support for ranges in GET/HEAD requests.
 https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Range_requests
+
+
+
+> write message buffer, then receive all request data into said buffer.
+* request "head" and "body" can be string_views into said buffer.
+* combine recieve methods, but factor out functionally similar steps.
+- the connection struct should provide send/recv functions.
+(said struct can be provided to http_send/recv functions)
+
+
+
+
+
+
+
+
+
 
 
 
