@@ -73,6 +73,7 @@ namespace HTTP {
 	const string	HTTP_HEADER_END		= "\r\n\r\n";
 	const size_t	MAX_HEAD_LENGTH = 1024 * 16;		// 16 KiB
 	const size_t	MAX_BODY_LENGTH = 1024 * 1024 * 128;// 128 MiB
+	const size_t	BUFFER_SHRINK_CAPACITY = 1024 * 64;// 64 KiB
 
 	struct MessageSocket {
 		int fd;
@@ -103,7 +104,7 @@ namespace HTTP {
 			length = 0;
 		}
 
-		void reserve_force(size_t new_capacity) {
+		void set_capacity(size_t new_capacity) {
 			char* new_data = new char[new_capacity];
 			size_t new_length = std::min(length, new_capacity);
 			memcpy(new_data, data, new_length * sizeof(data[0]));
@@ -113,7 +114,7 @@ namespace HTTP {
 			length		= new_length;
 		}
 		void reserve(size_t new_capacity) {
-			if(new_capacity > capacity) reserve_force(new_capacity);
+			if(new_capacity > capacity) set_capacity(new_capacity);
 		}
 
 		void resize(size_t new_length) {
@@ -133,9 +134,9 @@ namespace HTTP {
 			length += str.length();
 		}
 
-		void shift(size_t pos) {
-			memmove(data, data+pos, length-pos);
-			length -= pos;
+		void shift(size_t count) {
+			memmove(data, data+count, length-count);
+			length -= count;
 		}
 	};
 
@@ -180,7 +181,7 @@ namespace HTTP {
 		return ERROR_CODE::SUCCESS;
 	}
 	ERROR_CODE send_http_message(MessageSocket& socket, const char* data, const size_t size) {
-		int x = 0;
+		size_t x = 0;
 		while(x < size) {
 			ssize_t len = socket.send(data+x, size-x);
 			if(len ==  0) return ERROR_CODE::SEND_CLOSED;
@@ -313,6 +314,13 @@ namespace HTTP {
 	}
 
 
+	size_t get_content_length(const header_dict& headers) {
+		if(headers.contains(HTTP::HEADERS::content_length)) {
+			return string_to_int(headers.at(HTTP::HEADERS::content_length));
+		} else {
+			return 0;
+		}
+	}
 	ERROR_CODE send_http_request(MessageSocket& socket, MessageBuffer& head_buf, MessageBuffer& body_buf, http_request& request) {
 		append_start_line_request(head_buf, request);
 		append_headers(head_buf, request.headers);
@@ -343,7 +351,8 @@ namespace HTTP {
 
 		return ERROR_CODE::SUCCESS;
 	}
-	ERROR_CODE recv_http_request(MessageSocket& socket, MessageBuffer& buffer, http_request& request) {
+	ERROR_CODE recv_http_request(MessageSocket& socket, MessageBuffer& buffer, size_t& request_length, http_request& request) {
+		request_length = 0;
 		ERROR_CODE err;
 
 		size_t head_length;
@@ -356,16 +365,18 @@ namespace HTTP {
 		err = parse_headers(buffer, request.headers);
 		if(err != ERROR_CODE::SUCCESS) return err;
 
-		if(request.headers.contains(HTTP::HEADERS::content_length)) {
-			size_t content_length = string_to_int(request.headers.at(HTTP::HEADERS::content_length));
+		const size_t content_length = get_content_length(request.headers);
+		if(content_length > 0) {
 			err = recv_http_message_body(socket, buffer, head_length, content_length);
 			if(err != ERROR_CODE::SUCCESS) return err;
-			request.body = buffer.view(head_length, content_length);
 		}
+		request.body = buffer.view(head_length, content_length);
 
+		request_length = head_length + content_length;
 		return ERROR_CODE::SUCCESS;
 	}
-	ERROR_CODE recv_http_response(MessageSocket& socket, MessageBuffer& buffer, http_response& response) {
+	ERROR_CODE recv_http_response(MessageSocket& socket, MessageBuffer& buffer, size_t& request_length, http_response& response) {
+		request_length = 0;
 		ERROR_CODE err;
 
 		size_t head_length;
@@ -378,13 +389,23 @@ namespace HTTP {
 		err = parse_headers(buffer, response.headers);
 		if(err != ERROR_CODE::SUCCESS) return err;
 
-		if(response.headers.contains(HTTP::HEADERS::content_length)) {
-			size_t content_length = string_to_int(response.headers.at(HTTP::HEADERS::content_length));
+		const size_t content_length = get_content_length(response.headers);
+		if(content_length > 0) {
 			err = recv_http_message_body(socket, buffer, head_length, content_length);
 			if(err != ERROR_CODE::SUCCESS) return err;
-			response.body = buffer.view(head_length, content_length);
 		}
+		response.body = buffer.view(head_length, content_length);
 
+		request_length = head_length + content_length;
 		return ERROR_CODE::SUCCESS;
+	}
+	void send_cleanup(MessageBuffer& head_buf, MessageBuffer& body_buf) {
+		head_buf.clear();
+		body_buf.clear();
+		if(body_buf.capacity > BUFFER_SHRINK_CAPACITY) body_buf.set_capacity(BUFFER_SHRINK_CAPACITY);
+	}
+	void recv_cleanup(MessageBuffer& buffer, const size_t request_length) {
+		buffer.shift(request_length);
+		if(buffer.capacity > BUFFER_SHRINK_CAPACITY) buffer.set_capacity(buffer.length);
 	}
 }
