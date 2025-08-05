@@ -2,40 +2,15 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
-namespace sys {
-	#include <sys/socket.h>
-}
 #include "src/utils/string_util.cpp"
 #include "src/definitions/headers.cpp"
 #include "src/definitions/status_codes.cpp"
+#include "src/http_structs.cpp"
 
 namespace HTTP {
 	using std::string;
 	using std::string_view;
 	using namespace utils::string_util;
-
-	const string HTTP_PROTOCOL_1_1 = "HTTP/1.1";
-
-	using header_dict = std::map<string, string>;
-	struct http_request {
-		string_view	head;
-		string_view	body;
-		// start line.
-		string		method;
-		string		target;
-		string		protocol;
-		// headers.
-		header_dict	headers;
-	};
-	struct http_response {
-		string_view	head;
-		string_view	body;
-		// start line.
-		string	protocol = HTTP_PROTOCOL_1_1;
-		int		status_code;
-		// headers.
-		header_dict	headers;
-	};
 
 	enum ERROR_CODE {
 		SUCCESS = 0,
@@ -75,73 +50,7 @@ namespace HTTP {
 	const size_t	MAX_BODY_LENGTH = 1024 * 1024 * 128;// 128 MiB
 	const size_t	BUFFER_SHRINK_CAPACITY = 1024 * 64;// 64 KiB
 
-	struct MessageSocket {
-		int fd;
-
-		virtual ssize_t recv(char* dst, const size_t count) {
-			return sys::recv(this->fd, dst, count, 0);
-		}
-		virtual ssize_t send(const char* src, const size_t count) {
-			return sys::send(this->fd, src, count, 0);
-		}
-	};
-
-	struct MessageBuffer {
-		char* data;
-		size_t capacity;
-		size_t length;
-
-		MessageBuffer(int capacity) {
-			this->data = new char[capacity];
-			this->capacity = capacity;
-			this->length = 0;
-		}
-		~MessageBuffer() {
-			delete[] data;
-		}
-
-		void clear() {
-			length = 0;
-		}
-
-		void set_capacity(size_t new_capacity) {
-			char* new_data = new char[new_capacity];
-			size_t new_length = std::min(length, new_capacity);
-			memcpy(new_data, data, new_length * sizeof(data[0]));
-			delete[] data;
-			data		= new_data;
-			capacity	= new_capacity;
-			length		= new_length;
-		}
-		void reserve(size_t new_capacity) {
-			if(new_capacity > capacity) set_capacity(new_capacity);
-		}
-
-		void resize(size_t new_length) {
-			reserve(new_length);
-			length = new_length;
-		}
-
-		string_view view() const {
-			return string_view(data, length);
-		}
-		string_view view(size_t ofs, size_t len) const {
-			return string_view(data+ofs, len);
-		}
-
-		void append(const string& str) {
-			memcpy(data+length, str.data(), str.length() * sizeof(str[0]));
-			length += str.length();
-		}
-
-		void shift(size_t count) {
-			memmove(data, data+count, length-count);
-			length -= count;
-		}
-	};
-
-
-	ERROR_CODE recv_http_message_head(MessageSocket& socket, MessageBuffer& buffer, size_t& head_length) {
+	ERROR_CODE recv_http_message_head(HTTPConnection& connection, MessageBuffer& buffer, size_t& head_length) {
 		buffer.reserve(MAX_HEAD_LENGTH);
 		size_t scan_pos = 0;
 		while(true) {
@@ -158,21 +67,21 @@ namespace HTTP {
 			if(buffer.length >= MAX_HEAD_LENGTH) return ERROR_CODE::ERR_MAXLEN_HEAD;
 			// read some data.
 			const size_t count = MAX_HEAD_LENGTH - buffer.length;
-			const ssize_t len = socket.recv(buffer.data + buffer.length, count);
+			const ssize_t len = connection.recv(buffer.data + buffer.length, count);
 			if(len == 0) return ERROR_CODE::RECV_CLOSED_DURING_HEAD;
 			if(len <  0) return ERROR_CODE::RECV_ERROR_DURING_HEAD;
 			buffer.length += len;
 		}
 		return ERROR_CODE::UNKNOWN_ERROR;
 	}
-	ERROR_CODE recv_http_message_body(MessageSocket& socket, MessageBuffer& buffer, const size_t head_length, const size_t content_length) {
+	ERROR_CODE recv_http_message_body(HTTPConnection& connection, MessageBuffer& buffer, const size_t head_length, const size_t content_length) {
 		// check if content length is within bounds.
 		if(content_length > MAX_BODY_LENGTH) return ERROR_CODE::ERR_MAXLEN_BODY;
 		// read content.
 		buffer.reserve(head_length + content_length);
 		size_t count = content_length - (buffer.length - head_length);
 		while(count > 0) {
-			ssize_t len = socket.recv(buffer.data + buffer.length, count);
+			ssize_t len = connection.recv(buffer.data + buffer.length, count);
 			if(len == 0) return ERROR_CODE::RECV_CLOSED_DURING_BODY;
 			if(len <  0) return ERROR_CODE::RECV_ERROR_DURING_BODY;
 			buffer.length += len;
@@ -180,10 +89,10 @@ namespace HTTP {
 		}
 		return ERROR_CODE::SUCCESS;
 	}
-	ERROR_CODE send_http_message(MessageSocket& socket, const char* data, const size_t size) {
+	ERROR_CODE send_http_message(HTTPConnection& connection, const char* data, const size_t size) {
 		size_t x = 0;
 		while(x < size) {
-			ssize_t len = socket.send(data+x, size-x);
+			ssize_t len = connection.send(data+x, size-x);
 			if(len ==  0) return ERROR_CODE::SEND_CLOSED;
 			if(len == -1) return ERROR_CODE::SEND_ERROR;
 			x += len;
@@ -225,7 +134,7 @@ namespace HTTP {
 		bool success = (d0 != string::npos) & (d1 != string::npos);
 		return success;
 	}
-	void		append_start_line_request (MessageBuffer& buffer, http_request& request) {
+	void		append_start_line_request (MessageBuffer& buffer, const http_request& request) {
 		buffer.append(request.method);
 		buffer.append(" ");
 		buffer.append(request.target);
@@ -233,7 +142,7 @@ namespace HTTP {
 		buffer.append(request.protocol);
 		buffer.append(HTTP_HEADER_NEWLINE);
 	}
-	void		append_start_line_response(MessageBuffer& buffer, http_response& response) {
+	void		append_start_line_response(MessageBuffer& buffer, const http_response& response) {
 		buffer.append(response.protocol);
 		buffer.append(" ");
 		buffer.append(int_to_string(response.status_code));
@@ -276,12 +185,14 @@ namespace HTTP {
 		response.protocol = to_uppercase_ascii_sv(head.substr(a, b-a));
 		a=d0+1; b=d1;
 		response.status_code = string_to_int(head.substr(a, b-a));
+		a=d1+1; b=end;
+		response.status_text = to_uppercase_ascii_sv(head.substr(a, b-a));
 
 		return ERROR_CODE::SUCCESS;
 	}
 
 
-	ERROR_CODE append_headers(MessageBuffer& buffer, const header_dict& headers) {
+	void append_headers(MessageBuffer& buffer, const header_dict& headers) {
 		for(const auto& [key,val] : headers) {
 			buffer.append(key);
 			buffer.append(": ");
@@ -289,7 +200,6 @@ namespace HTTP {
 			buffer.append(HTTP_HEADER_NEWLINE);
 		}
 		buffer.append(HTTP_HEADER_NEWLINE);
-		return ERROR_CODE::SUCCESS;
 	}
 	ERROR_CODE parse_headers(const MessageBuffer& buffer, header_dict& headers) {
 		const string_view head = buffer.view();
@@ -306,7 +216,7 @@ namespace HTTP {
 			// add to header dictionary.
 			const string key = string(head.substr(beg, mid-beg));
 			const string val = string(head.substr(mid+1, end-(mid+1)));
-			headers[to_lowercase_ascii(key)] = trim_leading(val);
+			headers[to_lowercase_ascii(key)] = trim_leading(val);// TODO: remove trim call - trimming whitespace shouldnt be necessary.
 			// advance to the next line.
 			beg = end + HTTP_HEADER_NEWLINE.length();
 		}
@@ -321,42 +231,38 @@ namespace HTTP {
 			return 0;
 		}
 	}
-	ERROR_CODE send_http_request(MessageSocket& socket, MessageBuffer& head_buf, MessageBuffer& body_buf, http_request& request) {
+	ERROR_CODE send_http_request(HTTPConnection& connection, MessageBuffer& head_buf, const MessageBuffer& body_buf, const http_request& request) {
 		append_start_line_request(head_buf, request);
 		append_headers(head_buf, request.headers);
-		request.head = head_buf.view();
-		request.body = body_buf.view();
 
 		ERROR_CODE err;
-		err = send_http_message(socket, head_buf.data, head_buf.length);
+		err = send_http_message(connection, head_buf.data, head_buf.length);
 		if(err != ERROR_CODE::SUCCESS) return err;
 
-		if(body_buf.length > 0) err = send_http_message(socket, body_buf.data, body_buf.length);
+		if(body_buf.length > 0) err = send_http_message(connection, body_buf.data, body_buf.length);
 		if(err != ERROR_CODE::SUCCESS) return err;
 
 		return ERROR_CODE::SUCCESS;
 	}
-	ERROR_CODE send_http_response(MessageSocket& socket, MessageBuffer& head_buf, MessageBuffer& body_buf, http_response& response) {
+	ERROR_CODE send_http_response(HTTPConnection& connection, MessageBuffer& head_buf, const MessageBuffer& body_buf, const http_response& response) {
 		append_start_line_response(head_buf, response);
 		append_headers(head_buf, response.headers);
-		response.head = head_buf.view();
-		response.body = body_buf.view();
 
 		ERROR_CODE err;
-		err = send_http_message(socket, head_buf.data, head_buf.length);
+		err = send_http_message(connection, head_buf.data, head_buf.length);
 		if(err != ERROR_CODE::SUCCESS) return err;
 
-		if(body_buf.length > 0) err = send_http_message(socket, body_buf.data, body_buf.length);
+		if(body_buf.length > 0) err = send_http_message(connection, body_buf.data, body_buf.length);
 		if(err != ERROR_CODE::SUCCESS) return err;
 
 		return ERROR_CODE::SUCCESS;
 	}
-	ERROR_CODE recv_http_request(MessageSocket& socket, MessageBuffer& buffer, size_t& request_length, http_request& request) {
+	ERROR_CODE recv_http_request(HTTPConnection& connection, MessageBuffer& buffer, http_request& request, size_t& request_length) {
 		request_length = 0;
 		ERROR_CODE err;
 
 		size_t head_length;
-		err = recv_http_message_head(socket, buffer, head_length);
+		err = recv_http_message_head(connection, buffer, head_length);
 		if(err != ERROR_CODE::SUCCESS) return err;
 		request.head = buffer.view(0, head_length);
 
@@ -367,7 +273,7 @@ namespace HTTP {
 
 		const size_t content_length = get_content_length(request.headers);
 		if(content_length > 0) {
-			err = recv_http_message_body(socket, buffer, head_length, content_length);
+			err = recv_http_message_body(connection, buffer, head_length, content_length);
 			if(err != ERROR_CODE::SUCCESS) return err;
 		}
 		request.body = buffer.view(head_length, content_length);
@@ -375,12 +281,12 @@ namespace HTTP {
 		request_length = head_length + content_length;
 		return ERROR_CODE::SUCCESS;
 	}
-	ERROR_CODE recv_http_response(MessageSocket& socket, MessageBuffer& buffer, size_t& request_length, http_response& response) {
-		request_length = 0;
+	ERROR_CODE recv_http_response(HTTPConnection& connection, MessageBuffer& buffer, http_response& response, size_t& response_length) {
+		response_length = 0;
 		ERROR_CODE err;
 
 		size_t head_length;
-		err = recv_http_message_head(socket, buffer, head_length);
+		err = recv_http_message_head(connection, buffer, head_length);
 		if(err != ERROR_CODE::SUCCESS) return err;
 		response.head = buffer.view(0, head_length);
 
@@ -391,12 +297,12 @@ namespace HTTP {
 
 		const size_t content_length = get_content_length(response.headers);
 		if(content_length > 0) {
-			err = recv_http_message_body(socket, buffer, head_length, content_length);
+			err = recv_http_message_body(connection, buffer, head_length, content_length);
 			if(err != ERROR_CODE::SUCCESS) return err;
 		}
 		response.body = buffer.view(head_length, content_length);
 
-		request_length = head_length + content_length;
+		response_length = head_length + content_length;
 		return ERROR_CODE::SUCCESS;
 	}
 	void send_cleanup(MessageBuffer& head_buf, MessageBuffer& body_buf) {
@@ -404,8 +310,8 @@ namespace HTTP {
 		body_buf.clear();
 		if(body_buf.capacity > BUFFER_SHRINK_CAPACITY) body_buf.set_capacity(BUFFER_SHRINK_CAPACITY);
 	}
-	void recv_cleanup(MessageBuffer& buffer, const size_t request_length) {
-		buffer.shift(request_length);
+	void recv_cleanup(MessageBuffer& buffer, const size_t message_length) {
+		buffer.shift(message_length);
 		if(buffer.capacity > BUFFER_SHRINK_CAPACITY) buffer.set_capacity(buffer.length);
 	}
 }

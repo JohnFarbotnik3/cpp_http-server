@@ -47,6 +47,15 @@
 
 
 
+> correctness test:
+- use static_file_server handler.
+- use GET, PUT, DELETE operations.
+- treat server as if it is a Map.
+- use a Map client-side to store values.
+- generate a bunch of random requests to see if correct values are returned,
+as well as to determine performance under continuous load.
+
+
 > implement CORS related stuff:
 https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy#directives
 https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Permissions-Policy#directives
@@ -73,11 +82,12 @@ https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Range_requests
 (said struct can be provided to http_send/recv functions)
 
 
-
-
-
-
-
+> implement connection close after N seconds of no traffic.
+* HTTPServer should have a list of connections and connection stats.
+	worker-thread buffers and sockets should be part of connection_data struct.
+* HTTPServer should have a "housekeeping/watchdog" thread which scans through
+the list of connections, searching through connections with a "last-activity"
+timestamp that is greater than "keep-alive" duration.
 
 
 
