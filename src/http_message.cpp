@@ -1,3 +1,7 @@
+
+#ifndef F_http_message_cpp
+#define F_http_message_cpp
+
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -16,7 +20,10 @@ namespace HTTP {
 	const string	HTTP_HEADER_END		= "\r\n\r\n";
 	const size_t	MAX_HEAD_LENGTH = 1024 * 16;		// 16 KiB
 	const size_t	MAX_BODY_LENGTH = 1024 * 1024 * 128;// 128 MiB
-	const size_t	BUFFER_SHRINK_CAPACITY = 1024 * 64;// 64 KiB
+	const size_t	INIT_RECV_BUFFER_LENGTH = 1024 * 16;
+	const size_t	INIT_SEND_BUFFER_LENGTH = 1024 * 16;
+	const size_t	RECV_BUFFER_SHRINK_CAPACITY = 1024 * 64;// 64 KiB
+	const size_t	SEND_BUFFER_SHRINK_CAPACITY = 1024 * 64;// 64 KiB
 
 	enum ERROR_CODE {
 		SUCCESS = 0,
@@ -75,6 +82,23 @@ namespace HTTP {
 	}
 
 
+	struct path_query {
+		string path;
+		string query;
+
+		path_query(string target) {
+			if(target.contains('?')) {
+				size_t pos = target.find('?');
+				path = target.substr(0, pos);
+				query = target.substr(pos+1);
+			} else {
+				path = target;
+				query = "";
+			}
+		}
+	};
+
+
 	bool find_start_line_delims(const string_view& head, const size_t end, size_t& d0, size_t& d1) {
 		d0 = string::npos;
 		d1 = string::npos;
@@ -84,20 +108,21 @@ namespace HTTP {
 		bool success = (d0 != string::npos) & (d1 != string::npos);
 		return success;
 	}
-	void		append_start_line_request (MessageBuffer& buffer, const http_request& request) {
-		buffer.append(request.method);
+	void		append_start_line_request (MessageBuffer& buffer, const string& method, const string& path, const string& query, const string& protocol) {
+		buffer.append(method);
 		buffer.append(" ");
-		buffer.append(request.target);
+		buffer.append(path);
+		buffer.append(query);
 		buffer.append(" ");
-		buffer.append(request.protocol);
+		buffer.append(protocol);
 		buffer.append(HTTP_HEADER_NEWLINE);
 	}
-	void		append_start_line_response(MessageBuffer& buffer, const http_response& response) {
-		buffer.append(response.protocol);
+	void		append_start_line_response(MessageBuffer& buffer, const string& protocol, const int status_code) {
+		buffer.append(protocol);
 		buffer.append(" ");
-		buffer.append(int_to_string(response.status_code));
+		buffer.append(int_to_string(status_code));
 		buffer.append(" ");
-		buffer.append(STATUS_CODES.at(response.status_code));
+		buffer.append(STATUS_CODES.at(status_code));
 		buffer.append(HTTP_HEADER_NEWLINE);
 	}
 	ERROR_CODE	parse_start_line_request (const MessageBuffer& buffer, http_request& request) {
@@ -114,7 +139,15 @@ namespace HTTP {
 		size_t a=0, b=d0;
 		request.method = to_uppercase_ascii_sv(head.substr(a, b-a));
 		a=d0+1; b=d1;
-		request.target = head.substr(a, b-a);
+		string_view target = head.substr(a, b-a);
+		if(target.contains('?')) {
+			size_t pos = target.find('?');
+			request.path = target.substr(0, pos);
+			request.query = target.substr(pos);
+		} else {
+			request.path = target;
+			request.query = "";
+		}
 		a=d1+1; b=end;
 		request.protocol = to_uppercase_ascii_sv(head.substr(a, b-a));
 
@@ -181,17 +214,6 @@ namespace HTTP {
 	}
 
 
-	void send_cleanup(MessageBuffer& head_buf, MessageBuffer& body_buf) {
-		head_buf.clear();
-		body_buf.clear();
-		if(body_buf.capacity > BUFFER_SHRINK_CAPACITY) body_buf.set_capacity(BUFFER_SHRINK_CAPACITY);
-	}
-	void recv_cleanup(MessageBuffer& buffer, const size_t message_length) {
-		buffer.shift(message_length);
-		if(buffer.capacity > BUFFER_SHRINK_CAPACITY) buffer.set_capacity(buffer.length);
-	}
-
-
 	ERROR_CODE send_http_message(HTTPConnection& connection, const char* data, const size_t size) {
 		size_t x = 0;
 		while(x < size) {
@@ -242,79 +264,69 @@ namespace HTTP {
 		return ERROR_CODE::SUCCESS;
 	}
 
-
-	ERROR_CODE send_http_request (HTTPConnection& connection, MessageBuffer& head_buf, const MessageBuffer& body_buf, const http_request& request) {
-		append_start_line_request(head_buf, request);
-		append_headers(head_buf, request.headers);
-
-		ERROR_CODE err;
-		err = send_http_message(connection, head_buf.data, head_buf.length);
-		if(err != ERROR_CODE::SUCCESS) return err;
-
-		if(body_buf.length > 0) err = send_http_message(connection, body_buf.data, body_buf.length);
-		if(err != ERROR_CODE::SUCCESS) return err;
-
-		return ERROR_CODE::SUCCESS;
+	ERROR_CODE send_http_request (HTTPConnection& connection, const MessageBuffer& sendbuf) {
+		return send_http_message(connection, sendbuf.data, sendbuf.length);
 	}
-	ERROR_CODE send_http_response(HTTPConnection& connection, MessageBuffer& head_buf, const MessageBuffer& body_buf, const http_response& response) {
-		append_start_line_response(head_buf, response);
-		append_headers(head_buf, response.headers);
-
-		ERROR_CODE err;
-		err = send_http_message(connection, head_buf.data, head_buf.length);
-		if(err != ERROR_CODE::SUCCESS) return err;
-
-		if(body_buf.length > 0) err = send_http_message(connection, body_buf.data, body_buf.length);
-		if(err != ERROR_CODE::SUCCESS) return err;
-
-		return ERROR_CODE::SUCCESS;
+	ERROR_CODE send_http_response(HTTPConnection& connection, const MessageBuffer& sendbuf) {
+		return send_http_message(connection, sendbuf.data, sendbuf.length);
 	}
-	ERROR_CODE recv_http_request (HTTPConnection& connection, MessageBuffer& buffer, http_request& request, size_t& request_length) {
+	ERROR_CODE recv_http_request (HTTPConnection& connection, MessageBuffer& recvbuf, http_request& request, size_t& request_length) {
 		request_length = 0;
 		ERROR_CODE err;
 
 		size_t head_length;
-		err = recv_http_message_head(connection, buffer, head_length);
+		err = recv_http_message_head(connection, recvbuf, head_length);
 		if(err != ERROR_CODE::SUCCESS) return err;
-		request.head = buffer.view(0, head_length);
+		request.head = recvbuf.view(0, head_length);
 
-		err = parse_start_line_request(buffer, request);
+		err = parse_start_line_request(recvbuf, request);
 		if(err != ERROR_CODE::SUCCESS) return err;
-		err = parse_headers(buffer, request.headers);
+		err = parse_headers(recvbuf, request.headers);
 		if(err != ERROR_CODE::SUCCESS) return err;
 
 		const size_t content_length = get_content_length(request.headers);
 		if(content_length > 0) {
-			err = recv_http_message_body(connection, buffer, head_length, content_length);
+			err = recv_http_message_body(connection, recvbuf, head_length, content_length);
 			if(err != ERROR_CODE::SUCCESS) return err;
 		}
-		request.body = buffer.view(head_length, content_length);
+		request.body = recvbuf.view(head_length, content_length);
 
 		request_length = head_length + content_length;
 		return ERROR_CODE::SUCCESS;
 	}
-	ERROR_CODE recv_http_response(HTTPConnection& connection, MessageBuffer& buffer, http_response& response, size_t& response_length) {
+	ERROR_CODE recv_http_response(HTTPConnection& connection, MessageBuffer& recvbuf, http_response& response, size_t& response_length) {
 		response_length = 0;
 		ERROR_CODE err;
 
 		size_t head_length;
-		err = recv_http_message_head(connection, buffer, head_length);
+		err = recv_http_message_head(connection, recvbuf, head_length);
 		if(err != ERROR_CODE::SUCCESS) return err;
-		response.head = buffer.view(0, head_length);
+		response.head = recvbuf.view(0, head_length);
 
-		err = parse_start_line_response(buffer, response);
+		err = parse_start_line_response(recvbuf, response);
 		if(err != ERROR_CODE::SUCCESS) return err;
-		err = parse_headers(buffer, response.headers);
+		err = parse_headers(recvbuf, response.headers);
 		if(err != ERROR_CODE::SUCCESS) return err;
 
 		const size_t content_length = get_content_length(response.headers);
 		if(content_length > 0) {
-			err = recv_http_message_body(connection, buffer, head_length, content_length);
+			err = recv_http_message_body(connection, recvbuf, head_length, content_length);
 			if(err != ERROR_CODE::SUCCESS) return err;
 		}
-		response.body = buffer.view(head_length, content_length);
+		response.body = recvbuf.view(head_length, content_length);
 
 		response_length = head_length + content_length;
 		return ERROR_CODE::SUCCESS;
 	}
+
+	void send_cleanup(MessageBuffer& sendbuf) {
+		sendbuf.clear();
+		if(sendbuf.capacity > SEND_BUFFER_SHRINK_CAPACITY) sendbuf.set_capacity(SEND_BUFFER_SHRINK_CAPACITY);
+	}
+	void recv_cleanup(MessageBuffer& recvbuf, const size_t message_length) {
+		recvbuf.shift(message_length);
+		if(recvbuf.capacity > RECV_BUFFER_SHRINK_CAPACITY) recvbuf.set_capacity(std::max(recvbuf.length, RECV_BUFFER_SHRINK_CAPACITY));
+	}
 }
+
+#endif

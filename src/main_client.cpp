@@ -19,7 +19,7 @@ int main(const int argc, const char** argv) {
 		exit(status);
 	}
 
-	std::vector<string> targets = {
+	std::vector<string> paths = {
 		"index_1.html",
 		"/index_2.html",
 		"../index_3.html",
@@ -27,11 +27,11 @@ int main(const int argc, const char** argv) {
 		"//index_5.html",
 		"C:/index_6.html",
 	};
-	for(const string& target : targets) {
+	for(const string& path : paths) {
 		http_request request;
 		http_response response;
 		request.method = "PUT";
-		request.target = target;
+		request.path = path;
 		request.protocol = HTTP_PROTOCOL_1_1;
 		request.body = "test string\nabc 123 :)_ _ _";
 		request.headers[HEADERS::content_type] = get_mime_type(".txt");

@@ -29,12 +29,9 @@ namespace HTTP {
 			fprintf(stderr, "most recent errno: %s\n", strerror(errno));
 
 			// attempt to notify client of server error.
-			http_response response;
-			response.protocol = HTTP_PROTOCOL_1_1;
-			response.status_code = response_status;
-			MessageBuffer head_buffer(MAX_HEAD_LENGTH);
-			MessageBuffer body_buffer(0);
-			ERROR_CODE notify_err = send_http_response(connection, head_buffer, body_buffer, response);
+			MessageBuffer sendbuf(MAX_HEAD_LENGTH);
+			append_start_line_response(sendbuf, HTTP_PROTOCOL_1_1, response_status);
+			ERROR_CODE notify_err = send_http_response(connection, sendbuf);
 		}
 
 		void on_hard_error(HTTPConnection& connection, const int response_status, const ERROR_CODE err) {
@@ -42,29 +39,26 @@ namespace HTTP {
 			fprintf(stderr, "most recent errno: %s\n", strerror(errno));
 
 			// attempt to notify client of server error.
-			http_response response;
-			response.protocol = HTTP_PROTOCOL_1_1;
-			response.status_code = response_status;
-			MessageBuffer head_buffer(MAX_HEAD_LENGTH);
-			MessageBuffer body_buffer(0);
-			ERROR_CODE notify_err = send_http_response(connection, head_buffer, body_buffer, response);
+			MessageBuffer sendbuf(MAX_HEAD_LENGTH);
+			append_start_line_response(sendbuf, HTTP_PROTOCOL_1_1, response_status);
+			ERROR_CODE notify_err = send_http_response(connection, sendbuf);
 		}
 
-		virtual ERROR_CODE handle_request(const HTTPConnection& connection, const http_request& request, http_response& response, MessageBuffer& body_buffer) {
+		virtual int handle_request(MessageBuffer& sendbuf, const http_request& request) {
 			string data = "test abc 123 :)";
-			response.protocol = HTTP_PROTOCOL_1_1;
-			response.status_code = 200;
-			response.headers[HEADERS::content_type] = get_mime_type(".txt");
-			response.headers[HEADERS::content_length] = int_to_string(data.length());
-			body_buffer.append(data);
-			return ERROR_CODE::SUCCESS;
+			int status_code = 200;
+			header_dict headers;
+			headers[HEADERS::content_type] = get_mime_type(".txt");
+			headers[HEADERS::content_length] = int_to_string(data.length());
+			append_start_line_response(sendbuf, HTTP_PROTOCOL_1_1, status_code);
+			append_headers(sendbuf, headers);
+			return status_code;
 		}
 
 		void handle_connection(TCP::TCPConnection tcp_connection) override {
-			HTTPConnection http_connection(tcp_connection, MAX_HEAD_LENGTH, MAX_HEAD_LENGTH, 0);
-			MessageBuffer& recv_buffer = http_connection.recv_buffer;
-			MessageBuffer& head_buffer = http_connection.head_buffer;
-			MessageBuffer& body_buffer = http_connection.body_buffer;
+			HTTPConnection http_connection(tcp_connection, INIT_RECV_BUFFER_LENGTH, INIT_SEND_BUFFER_LENGTH);
+			MessageBuffer& recvbuf = http_connection.recv_buffer;
+			MessageBuffer& sendbuf = http_connection.send_buffer;
 			ERROR_CODE err;
 			try {
 				string ipstr = tcp_connection.get_address_string();
@@ -77,42 +71,42 @@ namespace HTTP {
 					http_request request;
 					size_t request_length;
 					http_connection.on_recv_starting();
-					err = recv_http_request(http_connection, recv_buffer, request, request_length);
+					err = recv_http_request(http_connection, recvbuf, request, request_length);
 					http_connection.on_recv_finished();
 					if(err != ERROR_CODE::SUCCESS) { on_soft_error(http_connection, 400, err); break; }
 
 					// generate response.
 					t0 = time64_ns::now();
-					http_response response;
-					handle_request(http_connection, request, response, body_buffer);
+					int status_code = handle_request(sendbuf, request);
 					if(err != ERROR_CODE::SUCCESS) { on_soft_error(http_connection, 500, err); break; }
 					time64_ns dt_handle = time64_ns::now() - t0;
 
 					// send response.
 					http_connection.on_send_starting();
-					err = send_http_response(http_connection, head_buffer, body_buffer, response);
+					err = send_http_response(http_connection, sendbuf);
 					http_connection.on_send_finished();
 					if(err != ERROR_CODE::SUCCESS) { on_soft_error(http_connection, 500, err); break; }
 					time64_ns dt_send = http_connection.send_t1 - http_connection.send_t0;
 
 					// push log entry.
 					time64_ns t1 = time64_ns::now();
-					printf("[%li] method=%s, status=%i, ip=%s, target=%s, reqlen=[%lu, %lu], reslen=[%lu, %lu], dt=[%li, %li]\n",
+					printf("[%li] fd=%i, method=%s, status=%i, ip=%s, path=%s%s, reqlen=[%lu, %lu], reslen=%lu, dt=[%li, %li]\n",
 						time64_ns::now().value_ms(),
+						tcp_connection.sockfd,
 						request.method.c_str(),
-						response.status_code,
+						status_code,
 						ipstr.c_str(),
-						request.target.c_str(),
+						request.path.c_str(),
+						request.query.c_str(),
 						request.head.length(),
 						request.body.length(),
-						head_buffer.length,
-						body_buffer.length,
+						sendbuf.length,
 						dt_handle.value_us(),
 						dt_send.value_us()
 					);
 
-					recv_cleanup(recv_buffer, request_length);
-					send_cleanup(head_buffer, body_buffer);
+					recv_cleanup(recvbuf, request_length);
+					send_cleanup(sendbuf);
 				}
 			} catch (const std::exception& e) {
 				fprintf(stderr, "%s\n", e.what());

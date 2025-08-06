@@ -16,17 +16,20 @@ namespace HTTP {
 
 	using header_dict = std::map<string, string>;
 
+	// struct containing parsed request data from recv_buffer. NOTE: do not use this for sending data!
 	struct http_request {
 		string_view	head;
 		string_view	body;
 		// start line.
 		string		method;
-		string		target;
+		string		path;	// target path, ex: "/files/images/image.png".
+		string		query;	// target query, ex: "?abc=123&def=456".
 		string		protocol;
 		// headers.
 		header_dict	headers;
 	};
 
+	// struct containing parsed response data from recv_buffer. NOTE: do not use this for sending data!
 	struct http_response {
 		string_view	head;
 		string_view	body;
@@ -100,8 +103,7 @@ namespace HTTP {
 	struct HTTPConnection {
 		TCPConnection tcp_connection;
 		MessageBuffer recv_buffer;
-		MessageBuffer head_buffer;
-		MessageBuffer body_buffer;
+		MessageBuffer send_buffer;
 		bool worker_thread_exited = false;
 		bool is_sending = false;
 		bool is_recving = false;
@@ -111,11 +113,10 @@ namespace HTTP {
 		time64_ns recv_t0;
 		time64_ns recv_t1;
 
-		HTTPConnection(TCPConnection tcp_connection, size_t rbuf_size, size_t hbuf_size, size_t bbuf_size) :
+		HTTPConnection(TCPConnection tcp_connection, size_t init_recvbuf_size, size_t init_sendbuf_size) :
 			tcp_connection(tcp_connection),
-			recv_buffer(rbuf_size),
-			head_buffer(hbuf_size),
-			body_buffer(bbuf_size),
+			recv_buffer(init_recvbuf_size),
+			send_buffer(init_sendbuf_size),
 			date_created(time64_ns::now())
 		{}
 
@@ -131,7 +132,7 @@ namespace HTTP {
 		void on_recv_starting() { recv_t0 = time64_ns::now(); is_recving = true; }
 		void on_recv_finished() { recv_t1 = time64_ns::now(); is_recving = false; }
 		bool is_send_too_slow(size_t min_rate) {
-			size_t length = head_buffer.length + body_buffer.length;
+			size_t length = send_buffer.length;
 			size_t rate = (length * 1000000000) / (time64_ns::now() - send_t0).value_ns();
 			return rate < min_rate;
 		}

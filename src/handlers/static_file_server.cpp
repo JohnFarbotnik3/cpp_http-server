@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
@@ -7,6 +8,7 @@
 #include "../HTTPServer.cpp"
 #include "../utils/file_io.cpp"
 #include "src/utils/config_util.cpp"
+#include "src/http_message.cpp"
 
 /*
 TODO:
@@ -60,23 +62,49 @@ namespace HTTP::Handlers::static_file_server {
 			}
 		}
 
-		http_response& return_status(http_response& response, const int status) {
-			response.status_code = status;
-			return response;
+		int return_status(MessageBuffer& sendbuf, const string& protocol, const int status) {
+			append_start_line_response(sendbuf, protocol, status);
+			header_dict headers;
+			headers[HTTP::HEADERS::content_length] = "0";
+			append_headers(sendbuf, headers);
+			return status;
+		}
+		int return_head(MessageBuffer& sendbuf, const string& protocol, const int status, const header_dict& headers) {
+			append_start_line_response(sendbuf, protocol, status);
+			append_headers(sendbuf, headers);
+			return status;
+		}
+		void append_head(MessageBuffer& sendbuf, const string& protocol, const int status, const header_dict& headers) {
+			append_start_line_response(sendbuf, protocol, status);
+			append_headers(sendbuf, headers);
+		}
+		uintmax_t get_file_size(const path target, std::error_code& ec) {
+			return fs::file_size(target, ec);
+		}
+		size_t append_file(MessageBuffer& sendbuf, const path target) {
+			std::ifstream file(target, std::ios::binary | std::ios::ate);
+			if (!file.is_open()) {
+				fprintf(stderr, "failed to open file for reading: %s\n", target.c_str());
+				fprintf(stderr, "errno: %s\n", strerror(errno));
+				return -1;
+			} else {
+				const size_t len = file.tellg();
+				sendbuf.reserve(sendbuf.length + len);
+				file.seekg(0);
+				file.read(sendbuf.data + sendbuf.length, len);
+				file.close();
+				sendbuf.length += len;
+				return len;
+			}
 		}
 
-		http_response handle_request(const http_request& request, MessageBuffer& body_buffer) {
-			http_response response;
-
-			// by default no content is returned (overwrite header as needed).
-			response.headers[HTTP::HEADERS::content_length] = "0";
-
+		int handle_request(MessageBuffer& sendbuf, const http_request& request, const string& protocol) {
 			// modify target file path.
 			path target;
-			if(request.target == "/") {
+			if(request.path == "/") {
 				target = path(prefix_canonical / "index.html");
 			} else {
-				string str = request.target;
+				string str = request.path;
 				if(str.starts_with("/")) str = str.substr(1);
 				target = path(prefix_canonical / str);
 			}
@@ -86,14 +114,14 @@ namespace HTTP::Handlers::static_file_server {
 			path target_canonical = fs::weakly_canonical(target, ec);
 			if(ec) {
 				fprintf(stderr, "%s\n", ec.message().c_str());
-				return return_status(response, 500);
+				return return_status(sendbuf, protocol, 500);
 			}
 			bool is_within_directory =
 				target_canonical.string().starts_with(prefix_canonical.string()) &&
 				target_canonical.string().length() > prefix_canonical.string().length();
 			if(!is_within_directory) {
 				fprintf(stderr, "[SECURITY] target is not within prefix directory!\n\tprefix=%s\n\ttarget=%s\n", prefix_canonical.c_str(), target_canonical.c_str());
-				return return_status(response, 404);
+				return return_status(sendbuf, protocol, 404);
 			}
 			target = target_canonical;
 
@@ -104,39 +132,46 @@ namespace HTTP::Handlers::static_file_server {
 			const bool method_get = request.method == HTTP::METHODS::GET;
 			const bool method_head = request.method == HTTP::METHODS::HEAD;
 			if(method_get || method_head) {
-				if(!config.can_get_files) return return_status(response, 403);
+				if(!config.can_get_files) return return_status(sendbuf, protocol, 403);
 				bool can_read_file = fs::exists(target) && fs::is_regular_file(target);
-				if(!can_read_file) return return_status(response, 404);
-				int status;
-				const string content = fio::read_file(target, status);
-				if(status != 0) return return_status(response, 500);
-				string ext = target.extension();
-				response.headers[HTTP::HEADERS::content_type] = get_mime_type(ext);
-				response.headers[HTTP::HEADERS::content_length] = int_to_string(content.length());
-				if(method_get) body_buffer.append(content);
-				return return_status(response, 200);
+				if(!can_read_file) return return_status(sendbuf, protocol, 404);
+
+				std::error_code ec;
+				size_t len = get_file_size(target, ec);
+				if(ec) return_status(sendbuf, protocol, 500);
+				const int status_code = 200;
+				header_dict headers;
+				headers[HTTP::HEADERS::content_type] = get_mime_type(target.extension());
+				headers[HTTP::HEADERS::content_length] = int_to_string(len);
+				append_head(sendbuf, protocol, status_code, headers);
+				if(method_get) {
+					if(append_file(sendbuf, target) < 0) return_status(sendbuf, protocol, 500);
+				}
+				return status_code;
 			}
 
 			if(request.method == HTTP::METHODS::PUT) {
-				if(!config.can_put_files) return return_status(response, 403);
+				if(!config.can_put_files) return return_status(sendbuf, protocol, 403);
 				const bool can_write_file = fs::is_directory(target.parent_path()) && (!fs::exists(target) || fs::is_regular_file(target));
-				if(!can_write_file) return return_status(response, 405);
+				if(!can_write_file) return return_status(sendbuf, protocol, 405);
+
 				int status;
 				bool file_exists = fs::is_regular_file(target);
 				fio::write_file(target, status, request.body.data(), request.body.size());
-				return return_status(response, (status != 0) ? 500 : (file_exists ? 204 : 201));
+				return return_status(sendbuf, protocol, (status != 0) ? 500 : (file_exists ? 204 : 201));
 			}
 
 			if(request.method == HTTP::METHODS::DELETE) {
-				if(!config.can_delete_files) return return_status(response, 403);
+				if(!config.can_delete_files) return return_status(sendbuf, protocol, 403);
 				const bool can_delete_file = fs::exists(target) && fs::is_regular_file(target);
-				if(!can_delete_file) return return_status(response, 404);
+				if(!can_delete_file) return return_status(sendbuf, protocol, 404);
+
 				int status;
 				fio::delete_file(target, status);
-				return return_status(response, (status != 0) ? 500 : 204);
+				return return_status(sendbuf, protocol, (status != 0) ? 500 : 204);
 			}
 
-			return return_status(response, 501);
+			return return_status(sendbuf, protocol, 501);
 		}
 
 	};
@@ -147,9 +182,9 @@ namespace HTTP::Handlers::static_file_server {
 
 		HTTPFileServer(const char* hostname, const char* portname, static_file_server_config config) : HTTPServer(hostname, portname), sfs(config) {}
 
-		ERROR_CODE handle_request(const HTTPConnection& connection, const http_request& request, http_response& response, MessageBuffer& body_buffer) override {
-			response = sfs.handle_request(request, body_buffer);
-			return ERROR_CODE::SUCCESS;
+		int handle_request(MessageBuffer& sendbuf, const http_request& request) override {
+			const string protocol = HTTP_PROTOCOL_1_1;
+			return sfs.handle_request(sendbuf, request, protocol);
 		}
 	};
 }
