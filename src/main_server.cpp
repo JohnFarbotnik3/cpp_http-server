@@ -9,7 +9,7 @@ using HTTP::Handlers::static_file_server::static_file_server_config;
 
 /*
 debug:
-g++ -std=c++23 -O2 fsanitize=address -I "./" -o "./bin/main_server.elf" "./src/main_server.cpp"
+g++ -std=c++23 -O2 -fsanitize=address -I "./" -o "./bin/main_server.elf" "./src/main_server.cpp"
 
 build:
 g++ -std=c++23 -O2 -I "./" -o "./bin/main_server.elf" "./src/main_server.cpp"

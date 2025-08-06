@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
-#include <thread>
+#include <unistd.h>
 
 namespace TCP {
 	using string = std::string;
@@ -11,7 +11,7 @@ namespace TCP {
 	struct TCPClient {
 		// TODO - connections should be created and returned by a function
 		// (to be managed externally).
-		tcp_connection_struct connection_info;
+		TCPConnection connection_info;
 
 		TCPClient() {
 			connection_info.sockfd = NONE_SOCKET_FD;

@@ -94,7 +94,7 @@ namespace TCP {
 				// prepare connection_info struct.
 				// https://stackoverflow.com/questions/24515526/error-invalid-argument-while-trying-to-accept-a-connection-from-a-client
 				// https://linux.die.net/man/2/accept
-				tcp_connection_struct connection_info;
+				TCPConnection connection_info;
 				connection_info.addrlen = sizeof(connection_info.addr);
 
 				// accept connection.
@@ -116,11 +116,11 @@ namespace TCP {
 			return 0;
 		}
 
-		void accept_connection(tcp_connection_struct connection_info) {
+		void accept_connection(TCPConnection connection_info) {
 			this->handle_connection(connection_info);
 			close(connection_info.sockfd);
 		}
-		virtual void handle_connection(tcp_connection_struct connection_info) {
+		virtual void handle_connection(TCPConnection connection_info) {
 			int sockfd = connection_info.sockfd;
 			string ipstr =  connection_info.get_address_string();
 			printf("accepted TCP connection\n");

@@ -65,7 +65,7 @@ namespace HTTP::Handlers::static_file_server {
 			return response;
 		}
 
-		http_response handle_request(const http_request& request) {
+		http_response handle_request(const http_request& request, MessageBuffer& body_buffer) {
 			http_response response;
 
 			// by default no content is returned (overwrite header as needed).
@@ -113,7 +113,7 @@ namespace HTTP::Handlers::static_file_server {
 				string ext = target.extension();
 				response.headers[HTTP::HEADERS::content_type] = get_mime_type(ext);
 				response.headers[HTTP::HEADERS::content_length] = int_to_string(content.length());
-				if(method_get) response.body = content;
+				if(method_get) body_buffer.append(content);
 				return return_status(response, 200);
 			}
 
@@ -147,8 +147,9 @@ namespace HTTP::Handlers::static_file_server {
 
 		HTTPFileServer(const char* hostname, const char* portname, static_file_server_config config) : HTTPServer(hostname, portname), sfs(config) {}
 
-		http_response handle_request(const accept_connection_struct& connection, const http_request& request) override {
-			return sfs.handle_request(request);
+		ERROR_CODE handle_request(const HTTPConnection& connection, const http_request& request, http_response& response, MessageBuffer& body_buffer) override {
+			response = sfs.handle_request(request, body_buffer);
+			return ERROR_CODE::SUCCESS;
 		}
 	};
 }

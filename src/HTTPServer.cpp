@@ -19,21 +19,9 @@ https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Messages
 
 namespace HTTP {
 	using std::string;
-	using utils::time_util::timepoint_64_ns;
-
-	// TODO - FIX MULTITHREADING HAZARD - multiple threads may read/write data in this struct at the same time!
-	// NOTE ^ I've already seen multiple incorrect values of req_counter show up in logs.
-	// ^ use get/set functions with mutexes/lock-guards for this. (read should use weak mutex, write should use strong mutex.)
-	struct http_server_stats {
-		// number of file-descriptors opened over lifetime of this server.
-		int fd_counter = 0;
-		// number of requests received.
-		int req_counter = 0;
-	};
+	using utils::time_util::time64_ns;
 
 	struct HTTPServer : TCP::TCPServer {
-		http_server_stats stats;
-
 		HTTPServer(const char* hostname, const char* portname): TCPServer(hostname, portname) {}
 
 		void on_soft_error(HTTPConnection& connection, const int response_status, const ERROR_CODE err) {
@@ -72,45 +60,45 @@ namespace HTTP {
 			return ERROR_CODE::SUCCESS;
 		}
 
-		void handle_connection(TCP::tcp_connection_struct tcp_connection) override {
+		void handle_connection(TCP::TCPConnection tcp_connection) override {
 			HTTPConnection http_connection(tcp_connection, MAX_HEAD_LENGTH, MAX_HEAD_LENGTH, 0);
 			MessageBuffer& recv_buffer = http_connection.recv_buffer;
 			MessageBuffer& head_buffer = http_connection.head_buffer;
 			MessageBuffer& body_buffer = http_connection.body_buffer;
-			int fd_counter = stats.fd_counter++;
 			ERROR_CODE err;
 			try {
 				string ipstr = tcp_connection.get_address_string();
 				printf("accepted HTTP connection | fd: %i, addr: %s\n", tcp_connection.sockfd, ipstr.c_str());
 
 				while(true) {
-					timepoint_64_ns t0;
+					time64_ns t0;
 
 					// get request.
 					http_request request;
 					size_t request_length;
+					http_connection.on_recv_starting();
 					err = recv_http_request(http_connection, recv_buffer, request, request_length);
+					http_connection.on_recv_finished();
 					if(err != ERROR_CODE::SUCCESS) { on_soft_error(http_connection, 400, err); break; }
 
 					// generate response.
-					t0 = timepoint_64_ns::now();
+					t0 = time64_ns::now();
 					http_response response;
 					handle_request(http_connection, request, response, body_buffer);
 					if(err != ERROR_CODE::SUCCESS) { on_soft_error(http_connection, 500, err); break; }
-					timepoint_64_ns dt_handle = timepoint_64_ns::now().delta(t0);
+					time64_ns dt_handle = time64_ns::now() - t0;
 
 					// send response.
-					t0 = timepoint_64_ns::now();
+					http_connection.on_send_starting();
 					err = send_http_response(http_connection, head_buffer, body_buffer, response);
+					http_connection.on_send_finished();
 					if(err != ERROR_CODE::SUCCESS) { on_soft_error(http_connection, 500, err); break; }
-					timepoint_64_ns dt_send = timepoint_64_ns::now().delta(t0);
+					time64_ns dt_send = http_connection.send_t1 - http_connection.send_t0;
 
 					// push log entry.
-					timepoint_64_ns t1 = timepoint_64_ns::now();
-					printf("[%li] fdn=%i, reqn=%i, method=%s, status=%i, ip=%s, target=%s, reqlen=[%lu, %lu], reslen=[%lu, %lu], dt=[%li, %li]\n",
-						timepoint_64_ns::now().value_ms(),
-						fd_counter,
-						stats.req_counter,
+					time64_ns t1 = time64_ns::now();
+					printf("[%li] method=%s, status=%i, ip=%s, target=%s, reqlen=[%lu, %lu], reslen=[%lu, %lu], dt=[%li, %li]\n",
+						time64_ns::now().value_ms(),
 						request.method.c_str(),
 						response.status_code,
 						ipstr.c_str(),
@@ -125,8 +113,6 @@ namespace HTTP {
 
 					recv_cleanup(recv_buffer, request_length);
 					send_cleanup(head_buffer, body_buffer);
-
-					stats.req_counter++;
 				}
 			} catch (const std::exception& e) {
 				fprintf(stderr, "%s\n", e.what());

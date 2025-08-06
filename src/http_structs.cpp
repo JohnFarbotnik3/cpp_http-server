@@ -4,11 +4,13 @@
 #include <map>
 #include <sys/socket.h>
 #include "src/tcp_structs.cpp"
+#include "src/utils/time_util.cpp"
 
 namespace HTTP {
 	using std::string;
 	using std::string_view;
-	using TCP::tcp_connection_struct;
+	using TCP::TCPConnection;
+	using utils::time_util::time64_ns;
 
 	const string HTTP_PROTOCOL_1_1 = "HTTP/1.1";
 
@@ -80,6 +82,7 @@ namespace HTTP {
 		}
 
 		void append(const string& str) {
+			reserve(length + str.length());
 			memcpy(data+length, str.data(), str.length() * sizeof(str[0]));
 			length += str.length();
 		}
@@ -90,53 +93,54 @@ namespace HTTP {
 		}
 	};
 
-	enum HTTP_CONNECTION_STATE {
-		CREATED,
-		RECIEVING_REQUEST,
-		HANDLING_REQUEST,
-		SENDING_RESPONSE,
-		THREAD_EXITED,
-	};
-
 	/*
 		a struct containing sockets, buffers, and statistics associated
 		with a given connection.
 	*/
 	struct HTTPConnection {
-		tcp_connection_struct tcp_connection;
+		TCPConnection tcp_connection;
 		MessageBuffer recv_buffer;
 		MessageBuffer head_buffer;
 		MessageBuffer body_buffer;
-		size_t total_bytes_send = 0;
-		size_t total_bytes_recv = 0;
-		bool closed = false;// true if worker thread has exited.
-		//time64_t date_created;
-		//time64_t date_recent_activity;
-		//time64_t keep_alive;
+		bool worker_thread_exited = false;
+		bool is_sending = false;
+		bool is_recving = false;
+		time64_ns date_created;
+		time64_ns send_t0;
+		time64_ns send_t1;
+		time64_ns recv_t0;
+		time64_ns recv_t1;
 
-		HTTPConnection(tcp_connection_struct tcp_connection, size_t rbuf_size, size_t hbuf_size, size_t bbuf_size) :
+		HTTPConnection(TCPConnection tcp_connection, size_t rbuf_size, size_t hbuf_size, size_t bbuf_size) :
 			tcp_connection(tcp_connection),
 			recv_buffer(rbuf_size),
 			head_buffer(hbuf_size),
-			body_buffer(bbuf_size)
+			body_buffer(bbuf_size),
+			date_created(time64_ns::now())
 		{}
 
-		virtual ssize_t recv(char* dst, const size_t count) {
-			ssize_t len = ::recv(tcp_connection.sockfd, dst, count, 0);
-			if(len > 0) total_bytes_recv += len;
-			return len;
+		ssize_t send(const char* src, const size_t count) {
+			return tcp_connection.send(src, count);
 		}
-		virtual ssize_t send(const char* src, const size_t count) {
-			ssize_t len = ::send(tcp_connection.sockfd, src, count, 0);
-			if(len > 0) total_bytes_send += len;
-			return len;
+		ssize_t recv(char* dst, const size_t count) {
+			return tcp_connection.recv(dst, count);
 		}
 
-		// TODO - close method to call after keep-alive time has been exeeded.
-		virtual void close_timeout() {}
-
-		// TODO - close method to call if abuse was detected by housekeeping thread.
-		virtual void close_abuse() {}
+		void on_send_starting() { send_t0 = time64_ns::now(); is_sending = true; }
+		void on_send_finished() { send_t1 = time64_ns::now(); is_sending = false; }
+		void on_recv_starting() { recv_t0 = time64_ns::now(); is_recving = true; }
+		void on_recv_finished() { recv_t1 = time64_ns::now(); is_recving = false; }
+		bool is_send_too_slow(size_t min_rate) {
+			size_t length = head_buffer.length + body_buffer.length;
+			size_t rate = (length * 1000000000) / (time64_ns::now() - send_t0).value_ns();
+			return rate < min_rate;
+		}
+		bool is_recv_too_slow(size_t min_rate, time64_ns keep_alive) {
+			if(time64_ns::now() < (recv_t0 + keep_alive)) return false;
+			size_t length = recv_buffer.length;
+			size_t rate = (length * 1000000000) / (time64_ns::now() - keep_alive - recv_t0).value_ns();
+			return rate < min_rate;
+		}
 	};
 
 	/*
@@ -148,6 +152,6 @@ namespace HTTP {
 		the Server will have a housekeeping thread which manages a vector
 		(and a freelist) of HTTPConnections, removing connections
 	*/
-	struct HTTPConnectionMap {};
+	struct HTTPConnectionMap {};// TODO
 
 };

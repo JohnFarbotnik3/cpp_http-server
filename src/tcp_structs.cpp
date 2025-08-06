@@ -62,15 +62,23 @@ namespace TCP {
 	};
 	*/
 
-	struct tcp_connection_struct {
+	struct TCPConnection {
 		sockaddr_storage	addr;
 		socklen_t			addrlen;
 		int					sockfd;
+		//TLSConnection*	tls;// TODO
 
 		std::string get_address_string() {
 			char buf[INET6_ADDRSTRLEN];
 			inet_ntop(addr.ss_family, &addr, buf, sizeof(buf));
 			return std::string(buf);
+		}
+
+		ssize_t send(const char* src, const size_t count) {
+			return ::send(sockfd, src, count, 0);
+		}
+		ssize_t recv(char* dst, const size_t count) {
+			return ::recv(sockfd, dst, count, 0);
 		}
 	};
 }

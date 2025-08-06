@@ -36,8 +36,8 @@ int main(const int argc, const char** argv) {
 		request.body = "test string\nabc 123 :)_ _ _";
 		request.headers[HEADERS::content_type] = get_mime_type(".txt");
 		request.headers[HEADERS::content_length] = int_to_string(request.body.length());
-		ERROR_CODE err = client.fetch(request, response);
-		if(err != ERROR_CODE::SUCCESS) fprintf(stderr, "%s\n", ERROR_MESSAGE.at(err).c_str());
+		//ERROR_CODE err = client.fetch(request, response);
+		//if(err != ERROR_CODE::SUCCESS) fprintf(stderr, "%s\n", ERROR_MESSAGE.at(err).c_str());
 		/*
 		printf("REQUEST HEAD:\n%s\n", request.head.c_str());
 		printf("REQUEST BODY:\n%s\n", request.body.c_str());

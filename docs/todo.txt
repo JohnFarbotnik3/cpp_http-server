@@ -88,9 +88,14 @@ https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Range_requests
 * HTTPServer should have a "housekeeping/watchdog" thread which scans through
 the list of connections, searching through connections with a "last-activity"
 timestamp that is greater than "keep-alive" duration.
+* sockfd can be used as index in list.
 
 
-
+> to avoid duplicating a TON of code, add a pointer in TCPConnection
+which points to a related TLSConnection struct, or is NULLPTR if just doing simple TCP.
+* add some other functions to TCPConnection that encapsulate behaviours
+such as accepting or opening a connection.
+* add pointer to TCPServer as well, which contains TLS server context, or NULLPTR if in plain TCP mode.
 
 
 
