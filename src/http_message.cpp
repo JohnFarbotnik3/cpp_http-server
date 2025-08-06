@@ -20,8 +20,7 @@ namespace HTTP {
 	const string	HTTP_HEADER_END		= "\r\n\r\n";
 	const size_t	MAX_HEAD_LENGTH = 1024 * 16;		// 16 KiB
 	const size_t	MAX_BODY_LENGTH = 1024 * 1024 * 128;// 128 MiB
-	const size_t	INIT_RECV_BUFFER_LENGTH = 1024 * 16;
-	const size_t	INIT_SEND_BUFFER_LENGTH = 1024 * 16;
+	const size_t	MAX_PACK_LENGTH = 1024 * 64;		// 64 KiB
 	const size_t	RECV_BUFFER_SHRINK_CAPACITY = 1024 * 64;// 64 KiB
 	const size_t	SEND_BUFFER_SHRINK_CAPACITY = 1024 * 64;// 64 KiB
 
@@ -80,23 +79,6 @@ namespace HTTP {
 		int len = snprintf(temp, 24, "%i", val);
 		return string(temp, len);
 	}
-
-
-	struct path_query {
-		string path;
-		string query;
-
-		path_query(string target) {
-			if(target.contains('?')) {
-				size_t pos = target.find('?');
-				path = target.substr(0, pos);
-				query = target.substr(pos+1);
-			} else {
-				path = target;
-				query = "";
-			}
-		}
-	};
 
 
 	bool find_start_line_delims(const string_view& head, const size_t end, size_t& d0, size_t& d1) {
@@ -264,11 +246,41 @@ namespace HTTP {
 		return ERROR_CODE::SUCCESS;
 	}
 
-	ERROR_CODE send_http_request (HTTPConnection& connection, const MessageBuffer& sendbuf) {
-		return send_http_message(connection, sendbuf.data, sendbuf.length);
+	ERROR_CODE send_http_request (HTTPConnection& connection, const http_request& request, MessageBuffer& headbuf, const MessageBuffer& bodybuf) {
+		append_start_line_request(headbuf, request.method, request.path, request.query, request.protocol);
+		append_headers(headbuf, request.headers);
+
+		// pack part of body into head (for better network utilization).
+		size_t pack_length = std::min(headbuf.length + bodybuf.length, MAX_PACK_LENGTH);
+		size_t copy_length = pack_length - headbuf.length;
+		headbuf.reserve(MAX_PACK_LENGTH);
+		memcpy(headbuf.data + headbuf.length, bodybuf.data, copy_length * sizeof(bodybuf.data[0]));
+
+		ERROR_CODE err;
+		err = send_http_message(connection, headbuf.data, pack_length);
+		if(err != ERROR_CODE::SUCCESS) return err;
+		err = send_http_message(connection, bodybuf.data+copy_length, bodybuf.length-copy_length);
+		if(err != ERROR_CODE::SUCCESS) return err;
+
+		return err;
 	}
-	ERROR_CODE send_http_response(HTTPConnection& connection, const MessageBuffer& sendbuf) {
-		return send_http_message(connection, sendbuf.data, sendbuf.length);
+	ERROR_CODE send_http_response(HTTPConnection& connection, const http_response& response, MessageBuffer& headbuf, const MessageBuffer& bodybuf) {
+		append_start_line_response(headbuf, response.protocol, response.status_code);
+		append_headers(headbuf, response.headers);
+
+		// pack part of body into head (for better network utilization).
+		size_t pack_length = std::min(headbuf.length + bodybuf.length, MAX_PACK_LENGTH);
+		size_t copy_length = pack_length - headbuf.length;
+		headbuf.reserve(MAX_PACK_LENGTH);
+		memcpy(headbuf.data + headbuf.length, bodybuf.data, copy_length * sizeof(bodybuf.data[0]));
+
+		ERROR_CODE err;
+		err = send_http_message(connection, headbuf.data, pack_length);
+		if(err != ERROR_CODE::SUCCESS) return err;
+		err = send_http_message(connection, bodybuf.data+copy_length, bodybuf.length-copy_length);
+		if(err != ERROR_CODE::SUCCESS) return err;
+
+		return err;
 	}
 	ERROR_CODE recv_http_request (HTTPConnection& connection, MessageBuffer& recvbuf, http_request& request, size_t& request_length) {
 		request_length = 0;
@@ -319,9 +331,10 @@ namespace HTTP {
 		return ERROR_CODE::SUCCESS;
 	}
 
-	void send_cleanup(MessageBuffer& sendbuf) {
-		sendbuf.clear();
-		if(sendbuf.capacity > SEND_BUFFER_SHRINK_CAPACITY) sendbuf.set_capacity(SEND_BUFFER_SHRINK_CAPACITY);
+	void send_cleanup(MessageBuffer& headbuf, MessageBuffer& bodybuf) {
+		headbuf.clear();
+		bodybuf.clear();
+		if(bodybuf.capacity > SEND_BUFFER_SHRINK_CAPACITY) bodybuf.set_capacity(SEND_BUFFER_SHRINK_CAPACITY);
 	}
 	void recv_cleanup(MessageBuffer& recvbuf, const size_t message_length) {
 		recvbuf.shift(message_length);
