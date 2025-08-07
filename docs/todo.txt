@@ -74,12 +74,33 @@ for purposes of more secure local use. (SSL/TLS)
 https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Range_requests
 
 
-
-> write message buffer, then receive all request data into said buffer.
-* request "head" and "body" can be string_views into said buffer.
-* combine recieve methods, but factor out functionally similar steps.
-- the connection struct should provide send/recv functions.
-(said struct can be provided to http_send/recv functions)
+> better threading architecture:
+- use non-blocking send, and maybe non-blocking recv (depending on architecture).
+- have N threads (ex: 8) which are responsible for all the connections (ex: 100K),
+and block until at least one connection has data to recv.
+- when there is data to recv, then collect the data and update state of connection
+(ex: waiting to recv head, body, or send response).
+- this means that only a small number of threads are interacting with shared data structures
+instead of 1K-1M threads.
+- only 1 thread should be interacting with a particular connection at a time!
+- housekeeping and abuse prevention should be easier with this architecture.
+* "request queue": a list of connection-pointers which have a request
+	and are waiting to be processed, i.e. have their response populated.
+	(worker threads can sleep if queue is empty)
+* "response queue": a list of connection-pointers which have been processed,
+	i.e. responses that are ready to be sent by server.
+* modules: these are meant to be mostly self contained, but baked into a single server for performance:
+	- static_file_server:
+		- one shared request/response queue.
+		- multiple worker threads.
+		- only one thread should operate on a particular file at a given moment.
+		- should have module config specifying target directory, and access rules.
+	- sqlite_database:
+		- one shared request/response queue.
+		- multiple worker threads.
+		- only one thread should operate on a particular database-file at once.
+		- should have module config specifying database-files directory, and access rules.
+...
 
 
 > implement connection close after N seconds of no traffic.

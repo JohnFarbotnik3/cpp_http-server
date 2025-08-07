@@ -16,13 +16,14 @@ namespace HTTP {
 	using std::string_view;
 	using namespace utils::string_util;
 
+	const size_t 	KB = 1024;
+	const size_t	MB = 1024 * 1024;
 	const string	HTTP_HEADER_NEWLINE	= "\r\n";
 	const string	HTTP_HEADER_END		= "\r\n\r\n";
-	const size_t	MAX_HEAD_LENGTH = 1024 * 16;		// 16 KiB
-	const size_t	MAX_BODY_LENGTH = 1024 * 1024 * 128;// 128 MiB
-	const size_t	MAX_PACK_LENGTH = 1024 * 64;		// 64 KiB
-	const size_t	RECV_BUFFER_SHRINK_CAPACITY = 1024 * 64;// 64 KiB
-	const size_t	SEND_BUFFER_SHRINK_CAPACITY = 1024 * 64;// 64 KiB
+	const size_t	MAX_HEAD_LENGTH = 16 * KB;
+	const size_t	MAX_BODY_LENGTH = 128 * MB;
+	const size_t	MAX_PACK_LENGTH = 64 * KB;
+	const size_t	BUFFER_SHRINK_CAPACITY = 64 * KB;
 
 	enum ERROR_CODE {
 		SUCCESS = 0,
@@ -334,11 +335,11 @@ namespace HTTP {
 	void send_cleanup(MessageBuffer& headbuf, MessageBuffer& bodybuf) {
 		headbuf.clear();
 		bodybuf.clear();
-		if(bodybuf.capacity > SEND_BUFFER_SHRINK_CAPACITY) bodybuf.set_capacity(SEND_BUFFER_SHRINK_CAPACITY);
+		if(bodybuf.capacity > BUFFER_SHRINK_CAPACITY) bodybuf.set_capacity(BUFFER_SHRINK_CAPACITY);
 	}
 	void recv_cleanup(MessageBuffer& recvbuf, const size_t message_length) {
 		recvbuf.shift(message_length);
-		if(recvbuf.capacity > RECV_BUFFER_SHRINK_CAPACITY) recvbuf.set_capacity(std::max(recvbuf.length, RECV_BUFFER_SHRINK_CAPACITY));
+		if(recvbuf.capacity > BUFFER_SHRINK_CAPACITY) recvbuf.set_capacity(std::max(recvbuf.length, BUFFER_SHRINK_CAPACITY));
 	}
 }
 
