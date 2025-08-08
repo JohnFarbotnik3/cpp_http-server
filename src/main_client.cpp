@@ -13,7 +13,8 @@ int main(const int argc, const char** argv) {
 
 	HTTPClient client;
 
-	int status = client.open_connection(NULL, portname);
+	TCPConnection connection;
+	int status = client.open_connection(NULL, portname, connection);
 	if(status != 0) {
 		fprintf(stderr, "ERROR: failed to open connection\n");
 		exit(status);

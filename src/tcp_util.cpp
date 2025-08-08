@@ -1,0 +1,107 @@
+
+#ifndef F_tcp_util_cpp
+#define F_tcp_util_cpp
+
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <unistd.h>
+#include "src/tcp_structs.cpp"
+
+namespace TCP {
+	using std::string;
+
+	/* sources:
+		https://en.wikipedia.org/wiki/Getaddrinfo
+		...
+	*/
+
+	// get linked-list of potential socket addresses for binding to localhost.
+	int get_potential_socket_addresses_for_localhost(const string& portname, addrinfo*& results) {
+		addrinfo hints;
+		memset(&hints, 0, sizeof(hints));
+		hints.ai_family		= AF_UNSPEC;
+		hints.ai_socktype	= SOCK_STREAM;
+		hints.ai_flags		= AI_PASSIVE;
+		int addr_status = getaddrinfo(NULL, portname.c_str(), &hints, &results);
+		return addr_status;
+	}
+
+	// get linked-list of potential socket addresses for connecting to a peer with given hostname and port.
+	int get_potential_socket_addresses_for_peer(const string& hostname, const string& portname, addrinfo*& results) {
+		addrinfo hints;
+		memset(&hints, 0, sizeof(hints));
+		hints.ai_family		= AF_UNSPEC;
+		hints.ai_socktype	= SOCK_STREAM;
+		//hints.ai_flags	= AI_PASSIVE;
+		int addr_status = getaddrinfo(hostname.c_str(), portname.c_str(), &hints, &results);
+		return addr_status;
+	}
+
+	// loop through all the potential socket addresses and connect to the first we can.
+	int try_to_connect(const addrinfo* results, TCPSocket& tcpsocket) {
+		for(const addrinfo* p = results; p != NULL; p = p->ai_next) {
+			const int sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+			if (sockfd == -1) continue;
+			if (connect(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
+				close(sockfd);
+				continue;
+			}
+
+			// copy connection info of successfull connection.
+			tcpsocket.fd = sockfd;
+			memcpy(&tcpsocket.addr, p->ai_addr, p->ai_addrlen);
+			tcpsocket.addrlen = p->ai_addrlen;
+			return EXIT_SUCCESS;
+		}
+		return EXIT_FAILURE;
+	}
+
+	// loop through all the potential socket addresses and connect to the first we can.
+	int try_to_listen(const addrinfo* results, TCPSocket& tcpsocket, const int backlog) {
+		for(const addrinfo* p = results; p != NULL; p = p->ai_next) {
+			const int listenfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+			if (listenfd == -1) continue;
+
+			// allow reusing socket-address after closing (fixes "address already in use").
+			const int yes = 1;
+			setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
+
+			if (bind(listenfd, p->ai_addr, p->ai_addrlen) == -1) {
+				close(listenfd);
+				continue;
+			}
+			if(listen(listenfd, backlog) == -1) {
+				close(listenfd);
+				return EXIT_FAILURE;
+			}
+
+			// copy connection info of successfull connection.
+			tcpsocket.fd = listenfd;
+			memcpy(&tcpsocket.addr, p->ai_addr, p->ai_addrlen);
+			tcpsocket.addrlen = p->ai_addrlen;
+			return EXIT_SUCCESS;
+		}
+		return EXIT_FAILURE;
+	}
+
+	// accept connection.
+	int try_accept(const TCPSocket& listen_socket, TCPSocket& new_socket) {
+		// prepare connection_info struct.
+		// https://stackoverflow.com/questions/24515526/error-invalid-argument-while-trying-to-accept-a-connection-from-a-client
+		// https://linux.die.net/man/2/accept
+		new_socket.addrlen = sizeof(new_socket.addr);
+
+		// accept connection.
+		int newfd = accept(listen_socket.fd, (sockaddr*)&new_socket.addr, &new_socket.addrlen);
+		if(newfd == -1) return EXIT_FAILURE;
+
+		new_socket.fd = newfd;
+		return EXIT_SUCCESS;
+	}
+
+
+
+}
+
+#endif

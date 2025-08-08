@@ -35,6 +35,6 @@ int main(const int argc, const char** argv) {
 		printf("failed to parse config file.\n");
 		exit(EXIT_FAILURE);
 	}
-	HTTP::Handlers::static_file_server::HTTPFileServer server(NULL, portname.c_str(), config);
+	HTTP::Handlers::static_file_server::HTTPFileServer server("", portname.c_str(), config);
 	server.start_listen();
 }

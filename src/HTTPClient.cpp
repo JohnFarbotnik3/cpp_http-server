@@ -18,7 +18,6 @@ namespace HTTP {
 		HTTPClient(): TCPClient() {}
 
 		ERROR_CODE fetch(HTTPConnection& connection, const http_request& request, MessageBuffer& head_buffer, MessageBuffer& body_buffer, MessageBuffer& recv_buffer, http_response& response, size_t& response_length) {
-			const int sockfd = this->connection_info.sockfd;
 			ERROR_CODE err;
 
 			err = send_http_request(connection, request, head_buffer, body_buffer);

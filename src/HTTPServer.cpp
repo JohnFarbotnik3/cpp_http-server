@@ -22,7 +22,7 @@ namespace HTTP {
 	using utils::time_util::time64_ns;
 
 	struct HTTPServer : TCP::TCPServer {
-		HTTPServer(const char* hostname, const char* portname): TCPServer(hostname, portname) {}
+		HTTPServer(const string hostname, const string portname): TCPServer(hostname, portname) {}
 
 		void on_soft_error(HTTPConnection& connection, const int status_code, const ERROR_CODE err) {
 			fprintf(stderr, "soft error during handle_connection(): %s\n", ERROR_MESSAGE.at(err).c_str());
@@ -60,15 +60,15 @@ namespace HTTP {
 			return response;
 		}
 
-		void handle_connection(TCP::TCPConnection tcp_connection) override {
-			HTTPConnection http_connection(tcp_connection, MAX_HEAD_LENGTH, MAX_HEAD_LENGTH, 0);
+		void handle_connection(TCP::TCPConnection connection) override {
+			HTTPConnection http_connection(connection, MAX_HEAD_LENGTH, MAX_HEAD_LENGTH, 0);
 			MessageBuffer& recvbuf = http_connection.recv_buffer;
 			MessageBuffer& headbuf = http_connection.head_buffer;
 			MessageBuffer& bodybuf = http_connection.body_buffer;
 			ERROR_CODE err;
 			try {
-				string ipstr = tcp_connection.get_address_string();
-				printf("accepted HTTP connection | fd: %i, addr: %s\n", tcp_connection.sockfd, ipstr.c_str());
+				string ipstr = connection.get_address_string();
+				printf("accepted HTTP connection | fd: %i, addr: %s\n", connection.socket.fd, ipstr.c_str());
 
 				while(true) {
 					time64_ns t0;
@@ -97,7 +97,7 @@ namespace HTTP {
 					// push log entry.
 					printf("[%li] fd=%i, method=%s, status=%i, ip=%s, path=%s%s, reqlen=[%lu, %lu], reslen=[%lu, %lu], dt=[%li, %li]\n",
 						time64_ns::now().value_ms(),
-						tcp_connection.sockfd,
+						connection.socket.fd,
 						request.method.c_str(),
 						response.status_code,
 						ipstr.c_str(),

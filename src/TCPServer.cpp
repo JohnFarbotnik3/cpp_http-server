@@ -3,27 +3,27 @@ This was written with the help of the following guides:
 <Beej's networking guide (c)>
 */
 
-#include "src/tcp_structs.cpp"
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <thread>
+#include "src/tcp_structs.cpp"
+#include "src/tcp_util.cpp"
 
 namespace TCP {
 	using string = std::string;
 
 	struct TCPServer {
+		const string	hostname;
+		const string	portname;
+		TCPSocket		listen_socket;
 
-		const char*	hostname;
-		const char* portname;
-		int			listenfd;
-		int			connection_counter;
-
-		TCPServer(const char* hostname, const char* portname) {
-			this->hostname = hostname;
-			this->portname = portname;
-			this->listenfd = NONE_SOCKET_FD;
-			this->connection_counter = 0;
+		TCPServer(const string hostname, const string portname) :
+			hostname(hostname),
+			portname(portname)
+		{
+			listen_socket.fd = NONE_SOCKET_FD;
 		}
 		~TCPServer() {
 			this->stop_listen();
@@ -31,84 +31,45 @@ namespace TCP {
 
 		/* stop listening for connections. */
 		void stop_listen() {
-			if(listenfd != NONE_SOCKET_FD) {
-				close(listenfd);
-				listenfd = NONE_SOCKET_FD;
+			if(listen_socket.fd != NONE_SOCKET_FD) {
+				close(listen_socket.fd);
+				listen_socket.fd = NONE_SOCKET_FD;
 			}
 		}
 
 		/* start listening for connections. */
 		int start_listen() {
-			if(listenfd != NONE_SOCKET_FD) {
+			if(listen_socket.fd != NONE_SOCKET_FD) {
 				fprintf(stderr, "error: server already listening.\n");
 				return 1;
 			}
 
-			// get address info for localhost.
-			addrinfo	hints;
-			addrinfo*	results;
-			memset(&hints, 0, sizeof hints);
-			hints.ai_family = AF_UNSPEC;
-			hints.ai_socktype = SOCK_STREAM;
-			hints.ai_flags = AI_PASSIVE;
-			int addr_status = getaddrinfo(hostname, portname, &hints, &results);
+			addrinfo* results;
+			const int addr_status = get_potential_socket_addresses_for_localhost(portname, results);
 			if (addr_status != 0) {
-				fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(addr_status));
-				return 1;
+				fprintf(stderr, "[get_potential_addresses_for_localhost] ERROR: %s\n", gai_strerror(addr_status));
+				return EXIT_FAILURE;
 			}
 
-			// TODO - try multiple addresses instead of just the first (Beej C networking guide, pg 39).
-			// create a socket (returns socket file-descriptor).
-			listenfd = socket(results->ai_family, results->ai_socktype, results->ai_protocol);
-			if(listenfd == -1) {
-				fprintf(stderr, "error: failed to create listener socket (sockfd: %i)\n", listenfd);
-				return 1;
+			if(try_to_listen(results, listen_socket, 5) != EXIT_SUCCESS) {
+				fprintf(stderr, "error: failed to listen for connections (errno: %s)\n", strerror(errno));
+				return EXIT_FAILURE;
 			}
-
-			// allow reusing socket-address after closing (fixes "address already in use").
-			int yes = 1;
-			setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
-
-			// bind listener socket to address+port.
-			int status = bind(listenfd, results->ai_addr, results->ai_addrlen);
-			if(status == -1) {
-				fprintf(stderr, "error: failed to bind listener socket (errno: %i)\n", errno);
-				return 1;
-			}
+			printf("listening for connections on port %s (listen_sockfd: %i)\n", portname.c_str(), listen_socket.fd);
+			printf("residual err: %s\n", strerror(errno));
 
 			// free address-info chain.
 			freeaddrinfo(results);
 
-			// listen for connections.
-			int backlog = 5;
-			status = listen(listenfd, backlog);
-			if(status == -1) {
-				fprintf(stderr, "error: failed to listen for connections (err: %s)\n", strerror(errno));
-				return 1;
-			}
-			printf("err: %s\n", strerror(errno));
-			printf("listening for connections on port %s (listen_sockfd: %i)\n", portname, listenfd);
-
 			// accept connections.
 			while(true) {
-				// prepare connection_info struct.
-				// https://stackoverflow.com/questions/24515526/error-invalid-argument-while-trying-to-accept-a-connection-from-a-client
-				// https://linux.die.net/man/2/accept
-				TCPConnection connection_info;
-				connection_info.addrlen = sizeof(connection_info.addr);
-
-				// accept connection.
-				int newfd = accept(listenfd, (sockaddr*)&connection_info.addr, &connection_info.addrlen);
-				if(newfd == -1) {
+				TCPConnection new_connection;
+				if(try_accept(listen_socket, new_connection.socket) == EXIT_FAILURE) {
 					fprintf(stderr, "error: failed to accept connection (err: %s)\n", strerror(errno));
 					continue;
 				}
-
-				// spawn worker thread.
-				connection_info.sockfd = newfd;
-				std::thread worker_thread(&TCPServer::accept_connection, this, connection_info);
+				std::thread worker_thread(&TCPServer::accept_connection, this, new_connection);
 				worker_thread.detach();
-				connection_counter++;
 			}
 
 			// close listening socket.
@@ -116,16 +77,15 @@ namespace TCP {
 			return 0;
 		}
 
-		void accept_connection(TCPConnection connection_info) {
-			this->handle_connection(connection_info);
-			close(connection_info.sockfd);
+		void accept_connection(TCPConnection new_connection) {
+			this->handle_connection(new_connection);
+			close(new_connection.socket.fd);
 		}
-		virtual void handle_connection(TCPConnection connection_info) {
-			int sockfd = connection_info.sockfd;
-			string ipstr =  connection_info.get_address_string();
+
+		virtual void handle_connection(TCPConnection connection) {
 			printf("accepted TCP connection\n");
-			printf("\tsockfd: %i\n", sockfd);
-			printf("\tipaddr: %s\n", ipstr.c_str());
+			printf("\tsockfd: %i\n", connection.socket.fd);
+			printf("\tipaddr: %s\n", connection.get_address_string().c_str());
 		}
 	};
 

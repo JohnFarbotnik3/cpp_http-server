@@ -168,7 +168,7 @@ namespace HTTP::Handlers::static_file_server {
 	struct HTTPFileServer : HTTP::HTTPServer {
 		static_file_server_struct sfs;
 
-		HTTPFileServer(const char* hostname, const char* portname, static_file_server_config config) : HTTPServer(hostname, portname), sfs(config) {}
+		HTTPFileServer(const string hostname, const string portname, static_file_server_config config) : HTTPServer(hostname, portname), sfs(config) {}
 
 		http_response handle_request(const http_request& request, MessageBuffer& body_buffer) override {
 			return sfs.handle_request(request, body_buffer);
