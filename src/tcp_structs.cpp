@@ -9,7 +9,12 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 
+#include <openssl/ssl.h>
+
+
 namespace TCP {
+	using std::string;
+
 	const int NONE_SOCKET_FD = -1;
 
 	/*
@@ -49,26 +54,37 @@ namespace TCP {
 	using addrinfo = addrinfo;
 
 	struct TCPSocket {
+		int					fd;
 		sockaddr_storage	addr;
 		socklen_t			addrlen;
-		int					fd;
 	};
 
 	struct TCPConnection {
 		TCPSocket socket;
-		//TLSConnection* tls;// TODO
+		SSL* ssl = nullptr;
 
-		std::string get_address_string() {
-			char buf[INET6_ADDRSTRLEN];
-			inet_ntop(socket.addr.ss_family, &socket.addr, buf, sizeof(buf));
-			return std::string(buf);
-		}
+		TCPConnection() = default;
+		TCPConnection(const TCPSocket& socket) : socket(socket) {}
+		TCPConnection(const TCPSocket& socket, SSL* ssl) : socket(socket), ssl(ssl) {}
 
 		ssize_t send(const char* src, const size_t count) {
-			return ::send(socket.fd, src, count, 0);
+			if(ssl != nullptr) {
+				size_t len;
+				int status = SSL_write_ex(ssl, src, count, &len);
+				return len;
+			} else {
+				return ::send(socket.fd, src, count, 0);
+			}
 		}
+
 		ssize_t recv(char* dst, const size_t count) {
-			return ::recv(socket.fd, dst, count, 0);
+			if(ssl != nullptr) {
+				size_t len;
+				int status = SSL_read_ex(ssl, dst, count, &len);
+				return len;
+			} else {
+				return ::recv(socket.fd, dst, count, 0);
+			}
 		}
 	};
 }

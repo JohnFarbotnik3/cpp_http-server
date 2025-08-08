@@ -7,19 +7,9 @@
 #include "../HTTPServer.cpp"
 #include "../utils/file_io.cpp"
 #include "src/utils/config_util.cpp"
-#include "src/http_message.cpp"
+#include "src/http_util.cpp"
 
-/*
-TODO:
-- convert prefix directory to absolute directory during init.
-- throw error during init if trying to use prefix-directory that doesnt exist.
-- add setting can_create_directories (default=false) to control
-	whether or not a write operation is allowed to create directories,
-	or if it should throw when parent directory of file to write does not exist.
-- add setting can_remove_directories (default=false), similar to above.
-...
 
-*/
 namespace HTTP::Handlers::static_file_server {
 	using std::string;
 	namespace fio = utils::file_io;

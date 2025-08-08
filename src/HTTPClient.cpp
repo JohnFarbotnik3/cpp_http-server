@@ -9,7 +9,7 @@
 
 #include <string>
 #include "./TCPClient.cpp"
-#include "./http_message.cpp"
+#include "./http_util.cpp"
 
 namespace HTTP {
 	using string = std::string;

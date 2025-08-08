@@ -12,7 +12,7 @@ https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Messages
 #include <netdb.h>
 #include <string>
 #include "./TCPServer.cpp"
-#include "./http_message.cpp"
+#include "./http_util.cpp"
 #include "./definitions/mime_types.cpp"
 #include "src/definitions/headers.cpp"
 #include "src/utils/time_util.cpp"
@@ -67,7 +67,7 @@ namespace HTTP {
 			MessageBuffer& bodybuf = http_connection.body_buffer;
 			ERROR_CODE err;
 			try {
-				string ipstr = connection.get_address_string();
+				const string ipstr = TCP::get_address_string(connection.socket.addr);
 				printf("accepted HTTP connection | fd: %i, addr: %s\n", connection.socket.fd, ipstr.c_str());
 
 				while(true) {

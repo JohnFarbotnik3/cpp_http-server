@@ -49,9 +49,7 @@ namespace TCP {
 			}
 
 			// copy connection info of successfull connection.
-			tcpsocket.fd = sockfd;
-			memcpy(&tcpsocket.addr, p->ai_addr, p->ai_addrlen);
-			tcpsocket.addrlen = p->ai_addrlen;
+			tcpsocket = TCPSocket(sockfd, *((sockaddr_storage*)p->ai_addr), p->ai_addrlen);
 			return EXIT_SUCCESS;
 		}
 		return EXIT_FAILURE;
@@ -86,7 +84,7 @@ namespace TCP {
 	}
 
 	// accept connection.
-	int try_accept(const TCPSocket& listen_socket, TCPSocket& new_socket) {
+	int try_to_accept(const TCPSocket& listen_socket, TCPSocket& new_socket) {
 		// prepare connection_info struct.
 		// https://stackoverflow.com/questions/24515526/error-invalid-argument-while-trying-to-accept-a-connection-from-a-client
 		// https://linux.die.net/man/2/accept
@@ -100,7 +98,16 @@ namespace TCP {
 		return EXIT_SUCCESS;
 	}
 
+	int get_peer_address_from_sockfd(const int sockfd, sockaddr_storage& addr, socklen_t& addrlen) {
+		addrlen = sizeof(addr);
+		return getpeername(sockfd, (sockaddr*)&addr, &addrlen);
+	}
 
+	string get_address_string(const sockaddr_storage& addr) {
+		char buf[INET6_ADDRSTRLEN];
+		inet_ntop(addr.ss_family, &addr, buf, sizeof(buf));
+		return std::string(buf);
+	}
 
 }
 
