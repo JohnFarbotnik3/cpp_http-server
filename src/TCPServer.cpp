@@ -34,10 +34,10 @@ namespace TCP {
 		{}
 
 		/* start listening for connections. */
-		int start_listen() {
+		int start_listen(bool expose_to_network) {
 
 			addrinfo* results;
-			const int addr_status = get_potential_socket_addresses_for_localhost(portname, results);
+			const int addr_status = get_potential_socket_addresses_for_listening(portname, results, expose_to_network);
 			if (addr_status != 0) {
 				fprintf(stderr, "[get_potential_addresses_for_localhost] ERROR: %s\n", gai_strerror(addr_status));
 				return EXIT_FAILURE;

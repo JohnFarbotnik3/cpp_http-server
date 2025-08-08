@@ -74,6 +74,17 @@ for purposes of more secure local use. (SSL/TLS)
 https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Range_requests
 
 
+
+> implement connection close after N seconds of no traffic.
+* HTTPServer should have a list of connections and connection stats.
+	worker-thread buffers and sockets should be part of connection_data struct.
+* HTTPServer should have a "housekeeping/watchdog" thread which scans through
+the list of connections, searching through connections with a "last-activity"
+timestamp that is greater than "keep-alive" duration.
+* sockfd can be used as index in list.
+
+
+
 > better threading architecture:
 - use non-blocking send, and maybe non-blocking recv (depending on architecture).
 - have N threads (ex: 8) which are responsible for all the connections (ex: 100K),
@@ -103,20 +114,6 @@ instead of 1K-1M threads.
 ...
 
 
-> implement connection close after N seconds of no traffic.
-* HTTPServer should have a list of connections and connection stats.
-	worker-thread buffers and sockets should be part of connection_data struct.
-* HTTPServer should have a "housekeeping/watchdog" thread which scans through
-the list of connections, searching through connections with a "last-activity"
-timestamp that is greater than "keep-alive" duration.
-* sockfd can be used as index in list.
-
-
-> to avoid duplicating a TON of code, add a pointer in TCPConnection
-which points to a related TLSConnection struct, or is NULLPTR if just doing simple TCP.
-* add some other functions to TCPConnection that encapsulate behaviours
-such as accepting or opening a connection.
-* add pointer to TCPServer as well, which contains TLS server context, or NULLPTR if in plain TCP mode.
 
 
 

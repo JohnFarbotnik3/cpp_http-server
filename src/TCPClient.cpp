@@ -22,7 +22,7 @@ namespace TCP {
 
 		int open_connection(const char* hostname, const char* portname, TCPConnection& connection) {
 			addrinfo* results;
-			const int addr_status = get_potential_socket_addresses_for_peer(hostname, portname, results);
+			const int addr_status = get_potential_socket_addresses_for_connecting(hostname, portname, results);
 			if (addr_status != 0) {
 				fprintf(stderr, "[get_potential_addresses_for_peer] ERROR: %s\n", gai_strerror(addr_status));
 				return EXIT_FAILURE;

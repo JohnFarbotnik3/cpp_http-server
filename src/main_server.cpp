@@ -54,6 +54,6 @@ int main(const int argc, const char** argv) {
 		const string path_pkey = utils::config_util::parse_string(config_tls.at("path_pkey"));
 		server.start_listen_TLS(path_cert, path_pkey);
 	} else {
-		server.start_listen();
+		server.start_listen(false);
 	}
 }

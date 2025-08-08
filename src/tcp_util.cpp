@@ -16,24 +16,26 @@ namespace TCP {
 		...
 	*/
 
-	// get linked-list of potential socket addresses for binding to localhost.
-	int get_potential_socket_addresses_for_localhost(const string& portname, addrinfo*& results) {
+	// get linked-list of potential socket addresses for binding.
+	int get_potential_socket_addresses_for_listening(const string& portname, addrinfo*& results, bool expose_to_network) {
 		addrinfo hints;
 		memset(&hints, 0, sizeof(hints));
 		hints.ai_family		= AF_UNSPEC;
 		hints.ai_socktype	= SOCK_STREAM;
 		hints.ai_flags		= AI_PASSIVE;
-		int addr_status = getaddrinfo(NULL, portname.c_str(), &hints, &results);
-		return addr_status;
+		if(expose_to_network) {
+			return getaddrinfo(NULL, portname.c_str(), &hints, &results);
+		} else {
+			return getaddrinfo("::1", portname.c_str(), &hints, &results);
+		}
 	}
 
 	// get linked-list of potential socket addresses for connecting to a peer with given hostname and port.
-	int get_potential_socket_addresses_for_peer(const string& hostname, const string& portname, addrinfo*& results) {
+	int get_potential_socket_addresses_for_connecting(const string& hostname, const string& portname, addrinfo*& results) {
 		addrinfo hints;
 		memset(&hints, 0, sizeof(hints));
 		hints.ai_family		= AF_UNSPEC;
 		hints.ai_socktype	= SOCK_STREAM;
-		//hints.ai_flags	= AI_PASSIVE;
 		int addr_status = getaddrinfo(hostname.c_str(), portname.c_str(), &hints, &results);
 		return addr_status;
 	}
