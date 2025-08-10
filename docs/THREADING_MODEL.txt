@@ -1,0 +1,78 @@
+
+
+> functions of interest:
+	- "poll" - get list of FDs that are ready to read/write.
+	- "epoll" - poll, but better.
+	- "select" - supposedly outdated; learn about, but use poll/epoll instead.
+...
+
+> open questions:
+	? performance of select vs poll vs epoll?
+	? cost of having/manipulating large number of mutexes? (ex. mutex per connection)
+	? what happens if multiple threads poll, data arrives,
+		and multiple thread wake up and try to recv data simulataneously?
+	? semaphore with number of tasks available for threads,
+		so that wake up right when they are needed,
+		and only the needed number of threads wakes up?
+	? what is the "thundering herd" problem (multithreading)?
+...
+
+> shared structures:
+	- connections: list of connections.
+	- recv_poll_list: list of connections which are waiting to recv data.
+	- send_poll_list: list of connections which are waiting to send data.
+	- recv_task_queue: queue of connections which have data to read.
+	- work_task_queue: queue of connections which are waiting for processing.
+	- send_task_queue: queue of connections which can send data.
+...
+
+> threads:
+	- master thread.
+	- housekeeping thread.
+		- periodically scan connections/ip-addresses.
+		- close connections after timeout (time with no activity > keepalive duration).
+		- close connections for DOS/abuse.
+	- acceptor thread-pool.
+		- use mutex so that only one is waiting for accept() at a time.
+		^ would this cause "thundering herd"? it may actually be better to not use a mutex.
+	* each poll-list  gets a thread.
+	* each task-queue gets a thread-pool.
+	* each task-queue can have a semaphore (corresponding to number of tasks) so that threads wake up as needed.
+...
+
+> modules:
+	* these should be mostly self contained, each with their own "master threads".
+		these will have shared task-queues that the rest of the server can
+		add/remove tasks to/from.
+	- static_file_server:
+		- one shared request/response queue.
+		- multiple worker threads.
+		- only one thread should operate on a particular file at a given moment.
+		- should have module config specifying target directory, and access rules.
+	- sqlite_database:
+		- one shared request/response queue.
+		- multiple worker threads.
+		- only one thread should operate on a particular database-file at once.
+		- should have module config specifying database-files directory, and access rules.
+...
+
+> structs (outdated):
+	- virtual functions in TCPServer to be overridden by HTTPServer:
+		- recv_message
+		- send_message
+	- useful state to add to tcp-connection:
+		- int connection_state;
+		^ this can store protocol specific values, such as for HTTP:
+			- WAITING_FOR_HEAD
+			- WAITING_FOR_BODY
+			- BEING_PROCESSED
+			- WAITING_TO_SEND_HEAD
+			- WAITING_TO_SEND_BODY
+			? if in state "WAITING_TO_SEND_X", how do we know how much we have already sent?
+			^^ we can add a "cursor" property to MessageBuffer, for use by recv/send handlers.
+	*** this would be much simpler to implement if HTTP server had TCP stuff inlined into it!
+		then virtual functions would not be needed either, and read/write state/cursors
+		could be build right into HTTPConnection struct.
+...
+
+
