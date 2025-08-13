@@ -44,6 +44,7 @@
 	* these should be mostly self contained, each with their own "master threads".
 		these will have shared task-queues that the rest of the server can
 		add/remove tasks to/from.
+	* create a common ServerModule struct which modules can subclass.
 	- static_file_server:
 		- one shared request/response queue.
 		- multiple worker threads.
@@ -74,5 +75,23 @@
 		then virtual functions would not be needed either, and read/write state/cursors
 		could be build right into HTTPConnection struct.
 ...
+
+> note: blocked worker-threads.
+	right now the server is not designed to handle blocking during the handling phase
+	of the request-lifecycle; for example if the request handler needs to make
+	a request to another server.
+
+	in theory, additional task-queues and polling-threads could be added to address this,
+	however this greatly increases complexity. a simpler solution would be to have more
+	worker threads than processor cores (example 4*N_CORES),
+	maintian a low-latency connection with the other services,
+	and to have timeouts in case some services temporarily become unavailable.
+	it does not actually solve the problem, but it is a simple mitigation to implement.
+
+	if I understand correctly, using counting-semaphores for dispatching threads
+	from the worker thread-pool wont suffer from the "thundering herd" problem,
+	and instead just wakes up one thread that is blocked on acquire() each time release() is called.
+...
+
 
 

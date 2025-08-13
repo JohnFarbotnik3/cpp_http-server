@@ -8,9 +8,9 @@ This was written with the help of the following guides:
 #include <cstring>
 #include <string>
 #include <thread>
+#include <filesystem>
 #include "src/tcp_structs.cpp"
 #include "src/tcp_util.cpp"
-#include <filesystem>
 
 #include <err.h>
 #include <sys/socket.h>
