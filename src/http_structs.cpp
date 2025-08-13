@@ -48,7 +48,6 @@ namespace HTTP {
 		MessageBuffer recv_buffer;
 		MessageBuffer head_buffer;
 		MessageBuffer body_buffer;
-		bool worker_thread_exited = false;
 		bool is_sending = false;
 		bool is_recving = false;
 		time64_ns date_created;

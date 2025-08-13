@@ -18,12 +18,31 @@
 ...
 
 > shared structures:
-	- connections: list of connections.
-	- recv_poll_list: list of connections which are waiting to recv data.
-	- send_poll_list: list of connections which are waiting to send data.
-	- recv_task_queue: queue of connections which have data to read.
-	- work_task_queue: queue of connections which are waiting for processing.
-	- send_task_queue: queue of connections which can send data.
+	* connection queues:
+		- each queue will have an ordered-set of connection-keys corresponding to connections to handle.
+		- a connection shall be in exactly 1 or 0 queue(s) at a time, based on its current state.
+		- a worker thread pops the first connection from the queue when starting to work on it.
+		- a counting-semaphore will track number of items in work_queue, so that worker threads are awoken as needed.
+	- connections: list of connections, indexed by FD.
+	- recv_array: blocked connections waiting to recv data.			<managed by a polling thread>
+	- work_queue: connections with data to send, recv, or process.	<managed by a worker thread-pool>
+	- send_array: blocked connections waiting to send data.			<managed by a polling thread>
+...
+
+> connection lifecycle:
+	* connections will have a state, and a cursor for each MessageBuffer.
+	- connection starts of in "recv_array" with state "WAITING_FOR_HEAD".
+	- polling thread moves it to "work_queue" when it has data to read.
+	- once in "work_queue", worker thread pop it from queue and handle it based on connection state:
+		WAITING_FOR_HEAD: recv until completed head, or socket blocks.
+		WAITING_FOR_BODY: recv until completed body, or socket blocks.
+		BEING_PROCESSED: (intermediate state.)
+		WAITING_TO_SEND_HEAD: send until head is sent, or socket blocks.
+		WAITING_TO_SEND_BODY: send until body is sent, or socket blocks.
+		CLOSED: connection is closed.
+	* if a socket blocks, move connection to "send_array"/"recv_array".
+	x problem: what if connection is closed by housekeeping thread during polling?
+		- solution: polling with timeout, so that new array contents can be used.
 ...
 
 > threads:
@@ -33,11 +52,10 @@
 		- close connections after timeout (time with no activity > keepalive duration).
 		- close connections for DOS/abuse.
 	- acceptor thread-pool.
-		- use mutex so that only one is waiting for accept() at a time.
+		- use mutex/semaphore so that only one is waiting for accept() at a time.
 		^ would this cause "thundering herd"? it may actually be better to not use a mutex.
-	* each poll-list  gets a thread.
-	* each task-queue gets a thread-pool.
-	* each task-queue can have a semaphore (corresponding to number of tasks) so that threads wake up as needed.
+	- worker thread-pool:
+		- worker threads will process connections in work_queue based on their current state.
 ...
 
 > modules:
@@ -57,40 +75,18 @@
 		- should have module config specifying database-files directory, and access rules.
 ...
 
-> structs (outdated):
-	- virtual functions in TCPServer to be overridden by HTTPServer:
-		- recv_message
-		- send_message
-	- useful state to add to tcp-connection:
-		- int connection_state;
-		^ this can store protocol specific values, such as for HTTP:
-			- WAITING_FOR_HEAD
-			- WAITING_FOR_BODY
-			- BEING_PROCESSED
-			- WAITING_TO_SEND_HEAD
-			- WAITING_TO_SEND_BODY
-			? if in state "WAITING_TO_SEND_X", how do we know how much we have already sent?
-			^^ we can add a "cursor" property to MessageBuffer, for use by recv/send handlers.
-	*** this would be much simpler to implement if HTTP server had TCP stuff inlined into it!
-		then virtual functions would not be needed either, and read/write state/cursors
-		could be build right into HTTPConnection struct.
-...
-
 > note: blocked worker-threads.
 	right now the server is not designed to handle blocking during the handling phase
 	of the request-lifecycle; for example if the request handler needs to make
 	a request to another server.
 
 	in theory, additional task-queues and polling-threads could be added to address this,
-	however this greatly increases complexity. a simpler solution would be to have more
-	worker threads than processor cores (example 4*N_CORES),
-	maintian a low-latency connection with the other services,
-	and to have timeouts in case some services temporarily become unavailable.
-	it does not actually solve the problem, but it is a simple mitigation to implement.
+	however this greatly increases complexity. a simpler solution would be to:
+	- have more worker threads than processor cores (example 2*N_CORES).
+	- maintian a low-latency connection with the other services.
+	- and have timeouts in case some services temporarily become unavailable.
 
-	if I understand correctly, using counting-semaphores for dispatching threads
-	from the worker thread-pool wont suffer from the "thundering herd" problem,
-	and instead just wakes up one thread that is blocked on acquire() each time release() is called.
+	it does not actually solve the problem, but it is a simple mitigation to implement.
 ...
 
 
