@@ -10,6 +10,7 @@ https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Messages
 #include <cstdio>
 #include <cstring>
 #include <netdb.h>
+#include <semaphore>
 #include <string>
 #include <thread>
 #include <filesystem>
@@ -20,6 +21,9 @@ https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Messages
 #include "src/definitions/mime_types.cpp"
 #include "src/definitions/headers.cpp"
 #include "src/utils/time_util.cpp"
+#include "src/SharedVectorSet.cpp"
+#include "src/SharedQueue.cpp"
+#include "src/SharedMap.cpp"
 
 #include <err.h>
 #include <sys/socket.h>
@@ -35,16 +39,59 @@ namespace HTTP {
 	namespace fs = std::filesystem;
 
 	struct HTTPServer {
-		const string	hostname;
-		const string	portname;
-		int poolsz_accept;// number of threads for accepting connections.
-		int poolsz_worker;// number of threads for handling requests.
+		const string hostname;
+		const string portname;
+		SharedMap<int, HTTPConnection*> connections;
+		SharedVectorSet<int> recv_set;// list of connections blocked on recv.
+		SharedVectorSet<int> send_set;// list of connections blocked on send.
+		SharedQueue<int> work_queue;// list of connections ready to send, recv, or process.
+		std::counting_semaphore<1000000> work_queue_semaphore;// number of tasks in work_queue.
+		std::vector<std::thread> accept_thread_pool;
+		std::vector<std::thread> worker_thread_pool;
+		std::thread polling_thread_recv;
+		std::thread polling_thread_send;
+		int polling_timeout;
 
-
-		HTTPServer(const string hostname, const string portname):
+		HTTPServer(const string hostname, const string portname, const int n_accept_threads, const int n_worker_threads):
 			hostname(hostname),
-			portname(portname)
+			portname(portname),
+			accept_thread_pool(n_accept_threads),
+			worker_thread_pool(n_worker_threads),
+			work_queue_semaphore(0)
 		{}
+
+		// TODO - continue from here...
+
+		void accept_loop() {
+			while(true) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+			}
+		}// TODO
+		void accept_loop_TLS() {
+			while(true) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+			}
+		}// TODO
+		void worker_loop() {
+			while(true) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+			}
+		}// TODO
+		void recv_polling_loop() {
+			while(true) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+			}
+		}// TODO
+		void send_polling_loop() {
+			while(true) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+			}
+		}// TODO
+		void housekeeping_loop() {
+			while(true) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+			}
+		}// TODO
 
 
 		/* start listening for connections. */
@@ -81,16 +128,16 @@ namespace HTTP {
 				worker_thread.detach();
 			}
 
+			// begin housekeeping.
+			housekeeping_loop();
+
 			// Unreachable cleanup code.
 			close(listen_socket.fd);
 			return EXIT_SUCCESS;
 		}
-		/*
-			start listening for TCP/TLS connections.
-
-			sources:
-				https://docs.openssl.org/master/man7/ossl-guide-tls-server-block/#simple-blocking-tls-server-example
-				[git repo]/openssl-3.5.1/demos/guide/tls-server-block.c
+		/* start listening for TCP/TLS connections.
+			https://docs.openssl.org/master/man7/ossl-guide-tls-server-block/#simple-blocking-tls-server-example
+			[git repo]/openssl-3.5.1/demos/guide/tls-server-block.c
 		*/
 		int start_listen_TLS(const string x509_cert_path, const string x509_pkey_path) {
 			// make sure required certificate and key files exist.
@@ -284,9 +331,10 @@ namespace HTTP {
 				worker_thread.detach();
 			}
 
-			/*
-			* Unreachable placeholder cleanup code, the above loop runs forever.
-			*/
+			// begin housekeeping.
+			housekeeping_loop();
+
+			/* Unreachable placeholder cleanup code, the above loop runs forever. */
 			SSL_CTX_free(ctx);
 			return EXIT_SUCCESS;
 		}

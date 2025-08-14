@@ -39,10 +39,20 @@
 		BEING_PROCESSED: (intermediate state.)
 		WAITING_TO_SEND_HEAD: send until head is sent, or socket blocks.
 		WAITING_TO_SEND_BODY: send until body is sent, or socket blocks.
-		CLOSED: connection is closed.
-	* if a socket blocks, move connection to "send_array"/"recv_array".
-	x problem: what if connection is closed by housekeeping thread during polling?
-		- solution: polling with timeout, so that new array contents can be used.
+		CLOSED: a polling/worker thread discovered that socket is closed.
+	* if a socket blocks, move connection to "send_array" or "recv_array".
+
+	x problems:
+		- what if connection is closed by housekeeping thread during polling?
+		- what if connection is closed while being operated on be a worker thread?
+	^ solution: after reading the documentation for poll(), I suspect the following:
+		- (~90-99%) if a connection is closed during polling, then poll() will return events
+			with flags other than POLLIN/POLLOUT.
+		- (~1-10%) if connection closes while being processed by worker, then worker can detect this when trying to send/recv.
+		? (<0.01%) if connection closes just after worker is done with it and is currently moving it to a polling set,
+			then there will be a closed connection in the poll list. I think it will immediately return POLLNVAL (?).
+		* in all cases, a worker should eventually detect the closed connection and can safely delete it
+			(since it is only in at most 1 queue/set at a time).
 ...
 
 > threads:
@@ -51,11 +61,13 @@
 		- periodically scan connections/ip-addresses.
 		- close connections after timeout (time with no activity > keepalive duration).
 		- close connections for DOS/abuse.
-	- acceptor thread-pool.
+	- acceptor thread-pool:
 		- use mutex/semaphore so that only one is waiting for accept() at a time.
 		^ would this cause "thundering herd"? it may actually be better to not use a mutex.
 	- worker thread-pool:
 		- worker threads will process connections in work_queue based on their current state.
+	- polling threads:
+		- poll list of blocked sockets to check when they become unblocked.
 ...
 
 > modules:
