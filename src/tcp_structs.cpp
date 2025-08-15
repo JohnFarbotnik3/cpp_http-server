@@ -10,6 +10,7 @@
 #include <sys/types.h>
 
 #include <openssl/ssl.h>
+#include <unistd.h>
 
 
 namespace TCP {
@@ -84,6 +85,14 @@ namespace TCP {
 				return len;
 			} else {
 				return ::recv(socket.fd, dst, count, 0);
+			}
+		}
+
+		void close() {
+			if(ssl != nullptr) {
+				SSL_free(ssl);
+			} else {
+				::close(socket.fd);
 			}
 		}
 	};

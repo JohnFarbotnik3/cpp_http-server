@@ -45,53 +45,128 @@ namespace HTTP {
 		SharedVectorSet<int> recv_set;// list of connections blocked on recv.
 		SharedVectorSet<int> send_set;// list of connections blocked on send.
 		SharedQueue<int> work_queue;// list of connections ready to send, recv, or process.
-		std::counting_semaphore<1000000> work_queue_semaphore;// number of tasks in work_queue.
-		std::vector<std::thread> accept_thread_pool;
 		std::vector<std::thread> worker_thread_pool;
+		std::thread polling_thread_accept;
 		std::thread polling_thread_recv;
 		std::thread polling_thread_send;
 		int polling_timeout;
+		bool shutting_down;
 
 		HTTPServer(const string hostname, const string portname, const int n_accept_threads, const int n_worker_threads):
 			hostname(hostname),
 			portname(portname),
-			accept_thread_pool(n_accept_threads),
 			worker_thread_pool(n_worker_threads),
-			work_queue_semaphore(0)
+			shutting_down(false)
 		{}
 
-		// TODO - continue from here...
 
-		void accept_loop() {
+		void insert_connection(TCPConnection tcp_connection) {
+			HTTPConnection* http_connection = new HTTPConnection(tcp_connection, MAX_HEAD_LENGTH, MAX_HEAD_LENGTH, 0);
+			const int fd = tcp_connection.socket.fd;
+			connections.set(fd, http_connection);
+			recv_set.insert(fd);
+		}
+		void remove_connection(int fd) {
+			connections.remove(fd);
+		}
+
+
+		static void accept_loop(HTTPServer* server, const TCPSocket* listen_socket) {
+			while(true) {
+				TCPSocket new_socket;
+				if(try_to_accept(*listen_socket, new_socket) == EXIT_FAILURE) {
+					fprintf(stderr, "error: failed to accept connection (err: %s)\n", strerror(errno));
+					continue;
+				}
+
+				TCPConnection tcp_connection(new_socket);
+				server->insert_connection(tcp_connection);
+			}
+		}
+		static void accept_loop_TLS(HTTPServer* server, SSL_CTX *ctx, BIO* acceptor_bio) {
+			while(true) {
+				/* Pristine error stack for each new connection */
+				ERR_clear_error();
+
+				/* Wait for the next client to connect */
+				if (BIO_do_accept(acceptor_bio) <= 0) {
+					/* Client went away before we accepted the connection */
+					continue;
+				}
+
+				std::thread handshake_thread(accept_loop_TLS_handshake_func, server, ctx, acceptor_bio);
+				handshake_thread.detach();
+			}
+		}
+		static void accept_loop_TLS_handshake_func(HTTPServer* server, SSL_CTX *ctx, BIO* acceptor_bio) {
+			/* Pop the client connection from the BIO chain */
+			BIO* client_bio = BIO_pop(acceptor_bio);
+			fprintf(stderr, "New client connection accepted\n");
+
+			/* Associate a new SSL handle with the new connection */
+			SSL* ssl = SSL_new(ctx);
+			if (ssl == NULL) {
+				ERR_print_errors_fp(stderr);
+				warnx("Error creating SSL handle for new connection");
+				BIO_free(client_bio);
+				return;
+			}
+			SSL_set_bio(ssl, client_bio, client_bio);
+
+			/* Attempt an SSL handshake with the client */
+			if (SSL_accept(ssl) <= 0) {
+				ERR_print_errors_fp(stderr);
+				warnx("Error performing SSL handshake with client");
+				SSL_free(ssl);
+				return;
+			}
+
+			TCPSocket new_socket;
+			BIO_get_fd(client_bio, &new_socket.fd);
+			TCP::get_peer_address_from_sockfd(new_socket.fd, new_socket.addr, new_socket.addrlen);
+			TCPConnection tcp_connection(new_socket, ssl);
+			server->insert_connection(tcp_connection);
+		}
+		// TODO - continue from here...
+		static void recv_polling_loop(HTTPServer* server) {
 			while(true) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 			}
 		}// TODO
-		void accept_loop_TLS() {
+		static void send_polling_loop(HTTPServer* server) {
 			while(true) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 			}
 		}// TODO
-		void worker_loop() {
+		static void worker_loop(HTTPServer* server) {
 			while(true) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 			}
 		}// TODO
-		void recv_polling_loop() {
+		static void housekeeping_loop(HTTPServer* server) {
 			while(true) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 			}
 		}// TODO
-		void send_polling_loop() {
-			while(true) {
-				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-			}
-		}// TODO
-		void housekeeping_loop() {
-			while(true) {
-				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-			}
-		}// TODO
+		void spawn_threads() {
+			polling_thread_recv = std::thread(recv_polling_loop, this);
+			polling_thread_send = std::thread(send_polling_loop, this);
+			for(int x=0;x<worker_thread_pool.size();x++) worker_thread_pool[x] = std::thread(worker_loop, this);
+			housekeeping_loop(this);
+		}
+		void shutdown() {
+			printf("shutting down...\n");
+			shutting_down = true;
+			printf("shutting down: accept thread.\n");
+			polling_thread_accept.join();
+			printf("shutting down: recv polling thread.\n");
+			polling_thread_recv.join();
+			printf("shutting down: send polling thread.\n");
+			polling_thread_send.join();
+			printf("shutting down: worker threads.\n");
+			for(int x=0;x<worker_thread_pool.size();x++) worker_thread_pool[x].join();
+			printf("shutting down: DONE.\n");
+		}
 
 
 		/* start listening for connections. */
@@ -116,22 +191,11 @@ namespace HTTP {
 			freeaddrinfo(results);
 
 			// accept connections.
-			while(true) {
-				TCPSocket new_socket;
-				if(try_to_accept(listen_socket, new_socket) == EXIT_FAILURE) {
-					fprintf(stderr, "error: failed to accept connection (err: %s)\n", strerror(errno));
-					continue;
-				}
-
-				TCPConnection new_connection(new_socket);
-				std::thread worker_thread(&HTTPServer::accept_connection, this, new_connection);
-				worker_thread.detach();
-			}
-
-			// begin housekeeping.
-			housekeeping_loop();
+			polling_thread_accept = std::thread(accept_loop, this, &listen_socket);
+			spawn_threads();
 
 			// Unreachable cleanup code.
+			shutdown();
 			close(listen_socket.fd);
 			return EXIT_SUCCESS;
 		}
@@ -290,61 +354,23 @@ namespace HTTP {
 			printf("residual err: %s\n", strerror(errno));
 
 			// accept connections.
-			while(true) {
-				/* Pristine error stack for each new connection */
-				ERR_clear_error();
-
-				/* Wait for the next client to connect */
-				if (BIO_do_accept(acceptor_bio) <= 0) {
-					/* Client went away before we accepted the connection */
-					continue;
-				}
-
-				/* Pop the client connection from the BIO chain */
-				BIO* client_bio = BIO_pop(acceptor_bio);
-				fprintf(stderr, "New client connection accepted\n");
-
-				/* Associate a new SSL handle with the new connection */
-				SSL* ssl = SSL_new(ctx);
-				if (ssl == NULL) {
-					ERR_print_errors_fp(stderr);
-					warnx("Error creating SSL handle for new connection");
-					BIO_free(client_bio);
-					continue;
-				}
-				SSL_set_bio(ssl, client_bio, client_bio);
-
-				/* Attempt an SSL handshake with the client */
-				if (SSL_accept(ssl) <= 0) {
-					ERR_print_errors_fp(stderr);
-					warnx("Error performing SSL handshake with client");
-					SSL_free(ssl);
-					continue;
-				}
-
-				TCPSocket new_socket;
-				BIO_get_fd(client_bio, &new_socket.fd);
-				TCP::get_peer_address_from_sockfd(new_socket.fd, new_socket.addr, new_socket.addrlen);
-				TCPConnection new_connection(new_socket, ssl);
-
-				std::thread worker_thread(&HTTPServer::accept_connection_TLS, this, new_connection);
-				worker_thread.detach();
-			}
-
-			// begin housekeeping.
-			housekeeping_loop();
+			polling_thread_accept = std::thread(accept_loop_TLS, this, ctx, acceptor_bio);
+			spawn_threads();
 
 			/* Unreachable placeholder cleanup code, the above loop runs forever. */
+			shutdown();
 			SSL_CTX_free(ctx);
 			return EXIT_SUCCESS;
 		}
+
+
 		void accept_connection(TCPConnection new_connection) {
 			this->handle_connection(new_connection);
-			close(new_connection.socket.fd);
+			new_connection.close();
 		}
 		void accept_connection_TLS(TCPConnection new_connection) {
 			this->handle_connection(new_connection);
-			SSL_free(new_connection.ssl);
+			new_connection.close();
 		}
 
 

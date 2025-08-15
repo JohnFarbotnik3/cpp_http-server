@@ -39,29 +39,42 @@ namespace HTTP {
 		header_dict	headers;
 	};
 
+	enum HTTP_CONNECTION_STATE {
+		// recv until completed head, or socket blocks.
+		WAITING_FOR_HEAD,
+		// recv until completed body, or socket blocks.
+		WAITING_FOR_BODY,
+		// (intermediate state.)
+		BEING_PROCESSED,
+		// send until head is sent, or socket blocks.
+		WAITING_TO_SEND_HEAD,
+		// send until body is sent, or socket blocks.
+		WAITING_TO_SEND_BODY,
+		// a polling/worker thread discovered that socket is closed.
+		CLOSED,
+	};
+
 	/*
 		a struct containing sockets, buffers, and statistics associated
 		with a given connection.
 	*/
 	struct HTTPConnection {
 		TCPConnection tcp_connection;
+		HTTP_CONNECTION_STATE state = WAITING_FOR_HEAD;
 		MessageBuffer recv_buffer;
 		MessageBuffer head_buffer;
 		MessageBuffer body_buffer;
-		bool is_sending = false;
-		bool is_recving = false;
-		time64_ns date_created;
-		time64_ns send_t0;
-		time64_ns send_t1;
-		time64_ns recv_t0;
-		time64_ns recv_t1;
+		time64_ns date_created = time64_ns::now();
+		time64_ns dt_recv = 0;
+		time64_ns dt_work = 0;
+		time64_ns dt_send = 0;
+
 
 		HTTPConnection(TCPConnection tcp_connection, size_t rbuf_size, size_t hbuf_size, size_t bbuf_size) :
 			tcp_connection(tcp_connection),
 			recv_buffer(rbuf_size),
 			head_buffer(hbuf_size),
-			body_buffer(bbuf_size),
-			date_created(time64_ns::now())
+			body_buffer(bbuf_size)
 		{}
 
 		ssize_t send(const char* src, const size_t count) {
@@ -70,33 +83,5 @@ namespace HTTP {
 		ssize_t recv(char* dst, const size_t count) {
 			return tcp_connection.recv(dst, count);
 		}
-
-		void on_send_starting() { send_t0 = time64_ns::now(); is_sending = true; }
-		void on_send_finished() { send_t1 = time64_ns::now(); is_sending = false; }
-		void on_recv_starting() { recv_t0 = time64_ns::now(); is_recving = true; }
-		void on_recv_finished() { recv_t1 = time64_ns::now(); is_recving = false; }
-		bool is_send_too_slow(size_t min_rate) {
-			size_t length = head_buffer.length + body_buffer.length;
-			size_t rate = (length * 1000000000) / (time64_ns::now() - send_t0).value_ns();
-			return rate < min_rate;
-		}
-		bool is_recv_too_slow(size_t min_rate, time64_ns keep_alive) {
-			if(time64_ns::now() < (recv_t0 + keep_alive)) return false;
-			size_t length = recv_buffer.length;
-			size_t rate = (length * 1000000000) / (time64_ns::now() - keep_alive - recv_t0).value_ns();
-			return rate < min_rate;
-		}
 	};
-
-	/*
-		a map of HTTPConnections.
-
-		these connections are accessed and updated by worker threads,
-		then marked as closed once worker thread exits.
-
-		the Server will have a housekeeping thread which manages a vector
-		(and a freelist) of HTTPConnections, removing connections
-	*/
-	struct HTTPConnectionMap {};// TODO
-
 };
