@@ -4,14 +4,16 @@
 #include <semaphore>
 
 template<typename T>
-struct SharedQueue {
+struct TaskQueue {
 	std::queue<T> queue;
 	std::mutex mutex;
 	std::counting_semaphore<1000000> semaphore = std::counting_semaphore<1000000>(0);
 
 	void push(T value) {
-		std::lock_guard lock(mutex);
-		queue.push(value);
+		{
+			std::lock_guard lock(mutex);
+			queue.push(value);
+		}
 		semaphore.release();
 	}
 

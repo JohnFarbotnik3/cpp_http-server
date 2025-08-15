@@ -27,6 +27,7 @@
 	- recv_array: blocked connections waiting to recv data.			<managed by a polling thread>
 	- work_queue: connections with data to send, recv, or process.	<managed by a worker thread-pool>
 	- send_array: blocked connections waiting to send data.			<managed by a polling thread>
+	*** TODO: use epoll() set instead of poll() with send/recv arrays.
 ...
 
 > connection lifecycle:

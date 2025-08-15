@@ -10,7 +10,7 @@ https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Messages
 #include <cstdio>
 #include <cstring>
 #include <netdb.h>
-#include <semaphore>
+#include <sys/epoll.h>
 #include <string>
 #include <thread>
 #include <filesystem>
@@ -21,9 +21,9 @@ https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Messages
 #include "src/definitions/mime_types.cpp"
 #include "src/definitions/headers.cpp"
 #include "src/utils/time_util.cpp"
-#include "src/SharedVectorSet.cpp"
-#include "src/SharedQueue.cpp"
+#include "src/TaskQueue.cpp"
 #include "src/SharedMap.cpp"
+#include "src/SharedVectorMap.cpp"
 
 #include <err.h>
 #include <sys/socket.h>
@@ -42,13 +42,11 @@ namespace HTTP {
 		const string hostname;
 		const string portname;
 		SharedMap<int, HTTPConnection*> connections;
-		SharedVectorSet<int> recv_set;// list of connections blocked on recv.
-		SharedVectorSet<int> send_set;// list of connections blocked on send.
-		SharedQueue<int> work_queue;// list of connections ready to send, recv, or process.
+		TaskQueue<int> work_queue;
 		std::vector<std::thread> worker_thread_pool;
-		std::thread polling_thread_accept;
-		std::thread polling_thread_recv;
-		std::thread polling_thread_send;
+		std::thread accept_thread;
+		std::thread polling_thread;
+		int polling_fd;
 		int polling_timeout;
 		bool shutting_down;
 
@@ -64,10 +62,27 @@ namespace HTTP {
 			HTTPConnection* http_connection = new HTTPConnection(tcp_connection, MAX_HEAD_LENGTH, MAX_HEAD_LENGTH, 0);
 			const int fd = tcp_connection.socket.fd;
 			connections.set(fd, http_connection);
-			recv_set.insert(fd);
+
+			// add to epoll group.
+			epoll_event ev;
+			ev.events = EPOLL_EVENTS::EPOLLONESHOT | EPOLL_EVENTS::EPOLLIN;
+			int status = epoll_ctl(polling_fd, EPOLL_CTL_ADD, fd, &ev);
+			if(status == -1) fprintf(stderr, "[insert_connection] epoll_ctl: %s\n", strerror(errno));
+		}
+		void re_arm_connection(int fd, EPOLL_EVENTS events) {
+			// re-arm fd in epool group.
+			epoll_event ev;
+			ev.events = EPOLL_EVENTS::EPOLLONESHOT | events;
+			int status = epoll_ctl(polling_fd, EPOLL_CTL_MOD, fd, &ev);
+			if(status == -1) fprintf(stderr, "[re_arm_connection] epoll_ctl: %s\n", strerror(errno));
 		}
 		void remove_connection(int fd) {
 			connections.remove(fd);
+
+			// remove from epoll group.
+			epoll_event ev;
+			int status = epoll_ctl(polling_fd, EPOLL_CTL_DEL, fd, &ev);
+			if(status == -1) fprintf(stderr, "[remove_connection] epoll_ctl: %s\n", strerror(errno));
 		}
 
 
@@ -127,19 +142,53 @@ namespace HTTP {
 			TCPConnection tcp_connection(new_socket, ssl);
 			server->insert_connection(tcp_connection);
 		}
+		static void polling_loop(HTTPServer* server) {
+			server->polling_fd = epoll_create1(0);
+			if(server->polling_fd == -1) {
+				fprintf(stderr, "[polling_loop] epoll_create1: %s\n", strerror(errno));
+				return;
+			}
+
+			while(true) {
+				std::array<epoll_event, 64> epoll_events;
+				int n_events = epoll_wait(server->polling_fd, epoll_events.data(), epoll_events.size(), server->polling_timeout);
+				if(n_events == -1) fprintf(stderr, "[polling_loop] epoll_wait: %s\n", strerror(errno));
+				else for(int x=0;x<n_events;x++) {
+					const epoll_event& ev = epoll_events[x];
+					// TODO: this loop can be sped up by getting read/write locks once per batch,
+					// rather than once per event.
+					server->connections.get(ev.data.fd)->recent_epoll_events = ev.events;
+					server->work_queue.push(ev.data.fd);
+					//if(ev.events & (EPOLL_EVENTS::EPOLLIN | EPOLL_EVENTS::EPOLLOUT | EPOLL_EVENTS::EPOLLHUP | EPOLL_EVENTS::EPOLLERR)) {}
+				}
+			}
+
+			int status = close(server->polling_fd);
+			if(status == -1) fprintf(stderr, "[polling_loop] close: %s\n", strerror(errno));
+		}
 		// TODO - continue from here...
-		static void recv_polling_loop(HTTPServer* server) {
-			while(true) {
-				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-			}
-		}// TODO
-		static void send_polling_loop(HTTPServer* server) {
-			while(true) {
-				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-			}
-		}// TODO
 		static void worker_loop(HTTPServer* server) {
 			while(true) {
+				HTTPConnection& connection = *server->connections.get(server->work_queue.pop());
+				const auto events = connection.recent_epoll_events;
+				const int conn_fd = connection.tcp_connection.socket.fd;
+				if(events & (EPOLL_EVENTS::EPOLLIN | EPOLL_EVENTS::EPOLLOUT)) {
+					const HTTP_CONNECTION_STATE state = connection.state;
+					if(state == HTTP_CONNECTION_STATE::WAITING_FOR_HEAD) {}// TODO
+					if(state == HTTP_CONNECTION_STATE::WAITING_FOR_BODY) {}// TODO
+					if(state == HTTP_CONNECTION_STATE::BEING_PROCESSED) {}// TODO
+					if(state == HTTP_CONNECTION_STATE::WAITING_TO_SEND_HEAD) {}// TODO
+					if(state == HTTP_CONNECTION_STATE::WAITING_TO_SEND_BODY) {}// TODO
+				} else if(events & EPOLL_EVENTS::EPOLLHUP) {
+					fprintf(stdout, "[worker_loop] connection closed. fd=%i\n", conn_fd);
+					server->remove_connection(conn_fd);
+				} else if(events & EPOLL_EVENTS::EPOLLERR) {
+					fprintf(stderr, "[worker_loop] connection error occurred.\n");
+					server->remove_connection(conn_fd);
+				} else {
+					fprintf(stderr, "[worker_loop] unknown event: %x\n", events);
+					server->remove_connection(conn_fd);
+				}
 				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 			}
 		}// TODO
@@ -149,8 +198,7 @@ namespace HTTP {
 			}
 		}// TODO
 		void spawn_threads() {
-			polling_thread_recv = std::thread(recv_polling_loop, this);
-			polling_thread_send = std::thread(send_polling_loop, this);
+			polling_thread = std::thread(polling_loop, this);
 			for(int x=0;x<worker_thread_pool.size();x++) worker_thread_pool[x] = std::thread(worker_loop, this);
 			housekeeping_loop(this);
 		}
@@ -158,13 +206,11 @@ namespace HTTP {
 			printf("shutting down...\n");
 			shutting_down = true;
 			printf("shutting down: accept thread.\n");
-			polling_thread_accept.join();
-			printf("shutting down: recv polling thread.\n");
-			polling_thread_recv.join();
-			printf("shutting down: send polling thread.\n");
-			polling_thread_send.join();
+			accept_thread.join();
 			printf("shutting down: worker threads.\n");
 			for(int x=0;x<worker_thread_pool.size();x++) worker_thread_pool[x].join();
+			printf("shutting down: polling thread.\n");
+			polling_thread.join();
 			printf("shutting down: DONE.\n");
 		}
 
@@ -191,7 +237,7 @@ namespace HTTP {
 			freeaddrinfo(results);
 
 			// accept connections.
-			polling_thread_accept = std::thread(accept_loop, this, &listen_socket);
+			accept_thread = std::thread(accept_loop, this, &listen_socket);
 			spawn_threads();
 
 			// Unreachable cleanup code.
@@ -354,7 +400,7 @@ namespace HTTP {
 			printf("residual err: %s\n", strerror(errno));
 
 			// accept connections.
-			polling_thread_accept = std::thread(accept_loop_TLS, this, ctx, acceptor_bio);
+			accept_thread = std::thread(accept_loop_TLS, this, ctx, acceptor_bio);
 			spawn_threads();
 
 			/* Unreachable placeholder cleanup code, the above loop runs forever. */

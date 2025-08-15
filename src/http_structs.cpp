@@ -2,6 +2,7 @@
 #include <cstring>
 #include <string>
 #include <map>
+#include <sys/epoll.h>
 #include <sys/socket.h>
 #include "src/MessageBuffer.cpp"
 #include "src/tcp_structs.cpp"
@@ -60,6 +61,7 @@ namespace HTTP {
 	*/
 	struct HTTPConnection {
 		TCPConnection tcp_connection;
+		uint32_t recent_epoll_events;
 		HTTP_CONNECTION_STATE state = WAITING_FOR_HEAD;
 		MessageBuffer recv_buffer;
 		MessageBuffer head_buffer;

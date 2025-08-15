@@ -8,6 +8,11 @@ struct SharedMap {
 	std::map<K, V> map;
 	std::shared_mutex mutex;
 
+	bool contains(K key) {
+		std::shared_lock lock(mutex);
+		return map.contains(key);
+	}
+
 	V& get(K key) {
 		std::shared_lock lock(mutex);
 		return map.at(key);
