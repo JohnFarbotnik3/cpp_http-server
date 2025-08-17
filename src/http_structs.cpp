@@ -45,20 +45,14 @@ namespace HTTP {
 		START_OF_CYCLE,
 		// recv until completed head, or socket blocks.
 		WAITING_FOR_HEAD,
-		// (intermediate state.)
-		PARSING_HEAD,
 		// recv until completed body, or socket blocks.
 		WAITING_FOR_BODY,
-		// (intermediate state.)
-		HANDLING_REQUEST,
 		// send until head is sent, or socket blocks.
 		WAITING_TO_SEND_HEAD,
 		// send until body is sent, or socket blocks.
 		WAITING_TO_SEND_BODY,
 		// a soft error occurred during cycle - try to send error response.
 		SOFT_ERROR,
-		// a polling/worker thread discovered that socket is closed.
-		CLOSED,
 	};
 
 	const size_t KB = 1024;
@@ -87,9 +81,9 @@ namespace HTTP {
 		http_request request;
 		http_response response;
 		time64_ns date_created = time64_ns::now();
-		time64_ns dt_recv = 0;
-		time64_ns dt_work = 0;
-		time64_ns dt_send = 0;
+		//time64_ns dt_recv = 0;
+		//time64_ns dt_work = 0;
+		//time64_ns dt_send = 0;
 
 
 		HTTPConnection(TCPConnection tcp_connection, size_t rbuf_size, size_t hbuf_size, size_t bbuf_size) :

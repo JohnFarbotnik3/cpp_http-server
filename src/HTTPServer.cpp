@@ -57,7 +57,7 @@ namespace HTTP {
 			shutting_down(false)
 		{}
 
-
+		// connection and socket functions.
 		void insert_connection_nonblocking(TCPConnection tcp_connection) {
 			// make socket non-blocking.
 			bool success = TCP::set_socket_nonblocking(tcp_connection.socket.fd, true);
@@ -99,14 +99,16 @@ namespace HTTP {
 			int status = epoll_ctl(polling_fd, EPOLL_CTL_MOD, fd, &ev);
 			if(status == -1) fprintf(stderr, "[re_arm_connection] epoll_ctl: %s\n", strerror(errno));
 		}
-		void re_arm_connection_recv(int fd) {
-			re_arm_connection(fd, EPOLL_EVENTS::EPOLLIN);
+		void re_arm_connection_recv(HTTPConnection& connection, HTTP_CONNECTION_STATE new_state) {
+			connection.state = new_state;
+			re_arm_connection(connection.fd(), EPOLL_EVENTS::EPOLLIN);
 		}
-		void re_arm_connection_send(int fd) {
-			re_arm_connection(fd, EPOLL_EVENTS::EPOLLOUT);
+		void re_arm_connection_send(HTTPConnection& connection, HTTP_CONNECTION_STATE new_state) {
+			connection.state = new_state;
+			re_arm_connection(connection.fd(), EPOLL_EVENTS::EPOLLOUT);
 		}
 
-
+		// TODO - check if these are needed.
 		void on_soft_http_error(HTTPConnection& connection, const int status_code, const ERROR_CODE err) {
 			fprintf(stderr, "soft error during handle_connection(): %s\n", ERROR_MESSAGE.at(err).c_str());
 			fprintf(stderr, "most recent errno: %s\n", strerror(errno));
@@ -132,43 +134,30 @@ namespace HTTP {
 			ERROR_CODE notify_err = send_http_response(connection, response, headbuf, bodybuf);
 		}
 
-
-		int try_recv(HTTPConnection& connection, char* dst, size_t& pos, const size_t end) {
+		// send+recv functions.
+		int recv_until_block(HTTPConnection& connection, char* dst, size_t& pos, const size_t end) {
 			ssize_t len;
 			while(pos < end) {
 				len = connection.recv(dst + pos, end - pos);
 				if(len > 0) pos += len;
 				else break;
 			}
-			if(len  < 0 && errno != EWOULDBLOCK) return -1;// error.
-			if(len == 0) return 0;// close.
-			return 1;// success.
-		}
-
-
-		void on_recv_close(HTTPConnection& connection) {
-			remove_connection(&connection);
-		}
-		void on_recv_error(HTTPConnection& connection) {
-			fprintf(stdout, "[worker_loop] error during recv.\n");
-			remove_connection(&connection);
-		}
-		int _recv_into_buffer(HTTPConnection& connection, MessageBuffer& buffer, const size_t expected_length) {
-			ssize_t len = 1;
-			while(buffer.length < expected_length) {
-				ssize_t len = connection.recv(buffer.data + buffer.length, expected_length - buffer.length);
-				if(len <= 0) break;
-				buffer.length += len;
-			}
-			// some data was read into buffer.
-			if(len > 0 || errno == EWOULDBLOCK) return 1;
-			// connection closed.
+			// error.
+			if(len  < 0 && errno != EWOULDBLOCK) return -1;
+			// socket closed.
 			if(len == 0) return 0;
-			// an error occurred.
-			return -1;
+			// success.
+			return 1;
+		}
+		void on_socket_close(HTTPConnection& connection) {
+			remove_connection(&connection);
+		}
+		void on_socket_error(HTTPConnection& connection) {
+			fprintf(stdout, "[worker_loop] socket error during send/recv.\n");
+			remove_connection(&connection);
 		}
 
-
+		// thread functions.
 		static void accept_loop(HTTPServer* server, const TCPSocket* listen_socket) {
 			while(true) {
 				TCPSocket new_socket;
@@ -250,53 +239,54 @@ namespace HTTP {
 			int status = close(server->polling_fd);
 			if(status == -1) fprintf(stderr, "[polling_loop] close: %s\n", strerror(errno));
 		}
-		void worker_func_cycle_start(HTTPConnection& connection) {
-			connection.state = START_OF_CYCLE;
-			connection.head_scan_cursor = 0;
-			return worker_func_recv_head(connection);
-		}
-		void worker_func_recv_head(HTTPConnection& connection) {
-			connection.state = WAITING_FOR_HEAD;
 
+		// TODO - check to see if its actually okay to use "chained return void-call" style.
+		// TODO ^ returning next-state and using a "do while" loop in main worker_func is another option.
+		void worker_func_cycle_start(HTTPConnection& connection) {
+			connection.head_scan_cursor = 0;
+			return worker_func_waiting_for_head(connection);
+		}
+		void worker_func_waiting_for_head(HTTPConnection& connection) {
 			const size_t HE_LEN = HTTP_HEADER_END.length();
 			MessageBuffer& recvbuf = connection.recv_buffer;
 
-			// try to find end of head.
-			if(recvbuf.length >= HE_LEN) {
-				size_t& scan_pos = connection.head_scan_cursor;
-				const size_t end_pos = recvbuf.view().find(HTTP_HEADER_END, scan_pos);
-				scan_pos = recvbuf.length - HE_LEN;
-				if(end_pos != string::npos) return worker_func_parse_head(connection, end_pos + HE_LEN);
+			// check if there is already a completed head in buffer.
+			size_t end_pos;
+			if(recvbuf.length > HE_LEN) {
+				end_pos = recvbuf.view().find(HTTP_HEADER_END, connection.head_scan_cursor);
+				connection.head_scan_cursor = recvbuf.length - HE_LEN;
 			}
 
 			// if not found, recv data until MAX_HEAD_LENGTH or EWOULDBLOCK.
-			int success = try_recv(connection, recvbuf.data, recvbuf.length, MAX_HEAD_LENGTH);
-			if(success == 0) return on_recv_close(connection);
-			if(success <  0) return on_recv_error(connection);
+			if(end_pos == string::npos) {
+				recvbuf.reserve(MAX_HEAD_LENGTH);
+				int success = recv_until_block(connection, recvbuf.data, recvbuf.length, MAX_HEAD_LENGTH);
+				if(success == 0) return on_socket_close(connection);
+				if(success <  0) return on_socket_error(connection);
 
-			// try to find end of head.
-			if(recvbuf.length >= HE_LEN) {
-				size_t& scan_pos = connection.head_scan_cursor;
-				const size_t end_pos = recvbuf.view().find(HTTP_HEADER_END, scan_pos);
-				scan_pos = recvbuf.length - HE_LEN;
-				if(end_pos != string::npos) return worker_func_parse_head(connection, end_pos + HE_LEN);
+				// try to find end of head again.
+				if(recvbuf.length > HE_LEN) {
+					const size_t end_pos = recvbuf.view().find(HTTP_HEADER_END, connection.head_scan_cursor);
+					connection.head_scan_cursor = recvbuf.length - HE_LEN;
+				}
+
+				// check (and return early) if head was still not found.
+				if(end_pos == string::npos) {
+					// check if head is too long.
+					if(recvbuf.length >= MAX_HEAD_LENGTH) {
+						// TODO - check if URI is too long first to give more specific status-code.
+						return worker_func_soft_error(connection, 431);// header fields too long.
+					} else {
+						// wait for more data.
+						return re_arm_connection_recv(connection, WAITING_FOR_HEAD);
+					}
+				}
 			}
 
-			// check if head is too long.
-			if(recvbuf.length >= MAX_HEAD_LENGTH) {
-				return worker_func_soft_error(connection, 431);
-			}
-
-			// wait for more data.
-			re_arm_connection_recv(connection.fd());
-		}
-		void worker_func_parse_head(HTTPConnection& connection, const size_t head_length) {
-			connection.state = PARSING_HEAD;
-
-			MessageBuffer& recvbuf = connection.recv_buffer;
+			// parse head.
 			http_request& request = connection.request;
 
-			connection.recv_length_head = head_length;
+			connection.recv_length_head = end_pos + HE_LEN;
 			request.head = recvbuf.view(0, connection.recv_length_head);
 			const ERROR_CODE ec = parse_head(request.head, request);
 			if(ec) return worker_func_soft_error(connection, 400);// mal-formatted request.
@@ -304,48 +294,43 @@ namespace HTTP {
 			const size_t body_length = get_content_length(request.headers);
 			connection.recv_length_body = body_length;
 			if(body_length > MAX_BODY_LENGTH) return worker_func_soft_error(connection, 413);// body too long.
-			if(body_length > 0) return worker_func_recv_body(connection);
-			else return worker_func_handle_request(connection);
+			if(body_length > 0)	return worker_func_waiting_for_body(connection);
+			else				return worker_func_handle_request(connection);
 		}
-		void worker_func_recv_body(HTTPConnection& connection) {
-			connection.state = WAITING_FOR_BODY;
-
+		void worker_func_waiting_for_body(HTTPConnection& connection) {
 			MessageBuffer& recvbuf = connection.recv_buffer;
 
 			const size_t head_length = connection.recv_length_head;
 			const size_t body_length = connection.recv_length_body;
 			const size_t total_length = head_length + body_length;
 			if(recvbuf.length < total_length) {
-				int success = try_recv(connection, recvbuf.data, recvbuf.length, total_length);
-				if(success == 0) return on_recv_close(connection);
-				if(success <  0) return on_recv_error(connection);
+				int success = recv_until_block(connection, recvbuf.data, recvbuf.length, total_length);
+				if(success == 0) return on_socket_close(connection);
+				if(success <  0) return on_socket_error(connection);
 			}
 
 			if(recvbuf.length >= total_length) {
 				connection.request.body = recvbuf.view(head_length, body_length);
 				return worker_func_handle_request(connection);
+			} else {
+				// wait for more data.
+				return re_arm_connection_recv(connection, WAITING_FOR_BODY);
 			}
-
-			// wait for more data.
-			re_arm_connection_recv(connection.fd());
 		}
 		void worker_func_handle_request(HTTPConnection& connection) {}// TODO
 		void worker_func_send_head(HTTPConnection& connection) {}// TODO
 		void worker_func_send_body(HTTPConnection& connection) {}// TODO
 		void worker_func_cycle_end(HTTPConnection& connection) {// TODO
 			// TODO - cleanup.
-
-			// place back into queue.
 			connection.state = START_OF_CYCLE;
-			work_queue.push(connection.fd());
 		}
 		void worker_func_soft_error(HTTPConnection& connection, const int status_code) {
-			connection.state = SOFT_ERROR;
 			connection.response.status_code = status_code;
 			return worker_func_soft_error(connection);
 		}
 		void worker_func_soft_error(HTTPConnection& connection) {}// TODO
-		void worker_func(HTTPConnection* connection_ptr) {
+		void worker_func() {
+			HTTPConnection* connection_ptr = connections.get(work_queue.pop());
 			HTTPConnection& connection = *connection_ptr;
 			const uint32_t events = connection.recent_epoll_events;
 			const int conn_fd = connection.tcp_connection.socket.fd;
@@ -362,17 +347,18 @@ namespace HTTP {
 			}
 
 			HTTP_CONNECTION_STATE& state = connection.state;
-			if(state == START_OF_CYCLE) return worker_func_cycle_start(connection);
-			if(state == WAITING_FOR_HEAD) return worker_func_recv_head(connection);
-			if(state == WAITING_FOR_BODY) return worker_func_recv_body(connection);
-			if(state == WAITING_TO_SEND_HEAD) return worker_func_send_head(connection);
-			if(state == WAITING_TO_SEND_BODY) return worker_func_send_body(connection);
-			if(state == SOFT_ERROR) return worker_func_soft_error(connection);
+			//if(state == START_OF_CYCLE) worker_func_cycle_start(connection);
+			if(state == WAITING_FOR_HEAD) worker_func_waiting_for_head(connection);
+			if(state == WAITING_FOR_BODY) worker_func_waiting_for_body(connection);
+			if(state == WAITING_TO_SEND_HEAD) worker_func_send_head(connection);
+			if(state == WAITING_TO_SEND_BODY) worker_func_send_body(connection);
+			if(state == SOFT_ERROR) worker_func_soft_error(connection);
+			while(state == START_OF_CYCLE) worker_func_cycle_start(connection);
 		}
 		static void worker_loop(HTTPServer* server) {
 			while(true) {
 				if(server->shutting_down && server->connections.map.size() == 0) return;
-				server->worker_func(server->connections.get(server->work_queue.pop()));
+				server->worker_func();
 			}
 		}
 		static void housekeeping_loop(HTTPServer* server) {// TODO
