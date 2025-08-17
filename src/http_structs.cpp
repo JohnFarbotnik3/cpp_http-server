@@ -45,10 +45,12 @@ namespace HTTP {
 		START_OF_CYCLE,
 		// recv until completed head, or socket blocks.
 		WAITING_FOR_HEAD,
+		// (intermediate state.)
+		PARSING_HEAD,
 		// recv until completed body, or socket blocks.
 		WAITING_FOR_BODY,
 		// (intermediate state.)
-		READY_TO_PROCESS,
+		HANDLING_REQUEST,
 		// send until head is sent, or socket blocks.
 		WAITING_TO_SEND_HEAD,
 		// send until body is sent, or socket blocks.
@@ -96,6 +98,10 @@ namespace HTTP {
 			head_buffer(hbuf_size),
 			body_buffer(bbuf_size)
 		{}
+
+		int fd() {
+			return tcp_connection.socket.fd;
+		}
 
 		ssize_t send(const char* src, const size_t count) {
 			return tcp_connection.send(src, count);
