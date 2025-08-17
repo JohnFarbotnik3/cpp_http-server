@@ -16,14 +16,8 @@ namespace HTTP {
 	using std::string_view;
 	using namespace utils::string_util;
 
-	const size_t 	KB = 1024;
-	const size_t	MB = 1024 * 1024;
 	const string	HTTP_HEADER_NEWLINE	= "\r\n";
 	const string	HTTP_HEADER_END		= "\r\n\r\n";
-	const size_t	MAX_HEAD_LENGTH = 16 * KB;
-	const size_t	MAX_BODY_LENGTH = 128 * MB;
-	const size_t	MAX_PACK_LENGTH = 64 * KB;
-	const size_t	BUFFER_SHRINK_CAPACITY = 64 * KB;
 
 	enum ERROR_CODE {
 		SUCCESS = 0,
@@ -37,9 +31,9 @@ namespace HTTP {
 		ERR_MAXLEN_HEAD,
 		ERR_MAXLEN_BODY,
 		MISSING_START_NEWLINE,
-		MISSING_START_DELIMITER,
+		MISSING_START_DELIM,
 		MISSING_HEADER_NEWLINE,
-		MISSING_HEADER_COLON,
+		MISSING_HEADER_DELIM,
 	};
 	const std::map<ERROR_CODE, string> ERROR_MESSAGE {
 		{SUCCESS				, "SUCCESS"},
@@ -52,9 +46,9 @@ namespace HTTP {
 		{ERR_MAXLEN_HEAD		, "ERR_MAXLEN_HEAD"},
 		{ERR_MAXLEN_BODY		, "ERR_MAXLEN_BODY"},
 		{MISSING_START_NEWLINE	, "MISSING_START_NEWLINE"},
-		{MISSING_START_DELIMITER, "MISSING_START_DELIMITER"},
+		{MISSING_START_DELIM	, "MISSING_START_DELIMITER"},
 		{MISSING_HEADER_NEWLINE	, "MISSING_HEADER_NEWLINE"},
-		{MISSING_HEADER_COLON	, "MISSING_HEADER_COLON"},
+		{MISSING_HEADER_DELIM	, "MISSING_HEADER_DELIMITER"},
 	};
 
 
@@ -91,24 +85,24 @@ namespace HTTP {
 		bool success = (d0 != string::npos) & (d1 != string::npos);
 		return success;
 	}
-	void		append_start_line_request (MessageBuffer& buffer, const string& method, const string& path, const string& query, const string& protocol) {
-		buffer.append(method);
+	void		append_start_line(MessageBuffer& buffer, const http_request& request) {
+		buffer.append(request.method);
 		buffer.append(" ");
-		buffer.append(path);
-		buffer.append(query);
+		buffer.append(request.path);
+		buffer.append(request.query);
 		buffer.append(" ");
-		buffer.append(protocol);
+		buffer.append(request.protocol);
 		buffer.append(HTTP_HEADER_NEWLINE);
 	}
-	void		append_start_line_response(MessageBuffer& buffer, const string& protocol, const int status_code) {
-		buffer.append(protocol);
+	void		append_start_line(MessageBuffer& buffer, const http_response& response) {
+		buffer.append(response.protocol);
 		buffer.append(" ");
-		buffer.append(int_to_string(status_code));
+		buffer.append(int_to_string(response.status_code));
 		buffer.append(" ");
-		buffer.append(STATUS_CODES.at(status_code));
+		buffer.append(STATUS_CODES.at(response.status_code));
 		buffer.append(HTTP_HEADER_NEWLINE);
 	}
-	ERROR_CODE	parse_start_line_request (const MessageBuffer& buffer, http_request& request) {
+	ERROR_CODE	parse_start_line(const MessageBuffer& buffer, http_request& request) {
 		const string_view head = buffer.view();
 
 		// find end of start-line.
@@ -116,7 +110,7 @@ namespace HTTP {
 		if(end == string::npos) return ERROR_CODE::MISSING_START_NEWLINE;
 		// get positions of start line delimiters.
 		size_t d0, d1;
-		if(!find_start_line_delims(head, end, d0, d1)) return ERROR_CODE::MISSING_START_DELIMITER;
+		if(!find_start_line_delims(head, end, d0, d1)) return ERROR_CODE::MISSING_START_DELIM;
 
 		// parse start-line parts.
 		size_t a=0, b=d0;
@@ -136,7 +130,7 @@ namespace HTTP {
 
 		return ERROR_CODE::SUCCESS;
 	}
-	ERROR_CODE	parse_start_line_response(const MessageBuffer& buffer, http_response& response) {
+	ERROR_CODE	parse_start_line(const MessageBuffer& buffer, http_response& response) {
 		const string_view head = buffer.view();
 
 		// find end of start-line.
@@ -144,7 +138,7 @@ namespace HTTP {
 		if(end == string::npos) return ERROR_CODE::MISSING_START_NEWLINE;
 		// get positions of start line delimiters.
 		size_t d0, d1;
-		if(!find_start_line_delims(head, end, d0, d1)) return ERROR_CODE::MISSING_START_DELIMITER;
+		if(!find_start_line_delims(head, end, d0, d1)) return ERROR_CODE::MISSING_START_DELIM;
 
 		// parse line parts.
 		size_t a=0, b=d0;
@@ -178,7 +172,7 @@ namespace HTTP {
 			if(beg == end) break;
 			// find header separator.
 			int mid = head.find(':', beg);
-			if(mid == string::npos) return ERROR_CODE::MISSING_HEADER_COLON;
+			if(mid == string::npos) return ERROR_CODE::MISSING_HEADER_DELIM;
 			// add to header dictionary.
 			const string key = string(head.substr(beg, mid-beg));
 			const string val = string(head.substr(mid+1, end-(mid+1)));
@@ -194,6 +188,102 @@ namespace HTTP {
 		} else {
 			return 0;
 		}
+	}
+
+
+	// TODO - switch to using these instead.
+	ERROR_CODE parse_head(const string_view& head, http_request& request) {
+		size_t line_beg;
+		size_t line_end;
+		string_view line;
+		line_beg = 0;
+		line_end = head.find(HTTP_HEADER_NEWLINE, line_beg);
+		if(line_end == string::npos) return ERROR_CODE::MISSING_START_NEWLINE;
+		line = head.substr(line_beg, line_end - line_beg);
+
+		// parse start line.
+		{
+			size_t a,b;
+			a = 0;
+			b = line.find(' ', a);
+			if(b == string::npos) return ERROR_CODE::MISSING_START_DELIM;
+			request.method = to_uppercase_ascii_sv(line.substr(a, b-a));
+			a = b + 1;
+			b = line.find(' ', a);
+			if(b == string::npos) return ERROR_CODE::MISSING_START_DELIM;
+			const size_t x = line.find('?', a);
+			if(a < x && x < b) {
+				request.path  = line.substr(a, x-a);
+				request.query = line.substr(x, b-x);
+			} else {
+				request.path  = line.substr(a, b-a);
+				request.query = "";
+			}
+			a = b + 1;
+			b = line.length();
+			request.protocol = to_uppercase_ascii_sv(line.substr(a, b-a));
+		}
+
+		// parse headers.
+		while(true) {
+			line_beg = line_end + HTTP_HEADER_NEWLINE.length();
+			line_end = head.find(HTTP_HEADER_NEWLINE, line_beg);
+			if(line_end == string::npos) return ERROR_CODE::MISSING_HEADER_NEWLINE;
+			if(line_end == line_beg) break;
+			line = head.substr(line_beg, line_end - line_beg);
+			const size_t a = 0;
+			const size_t x = line.find(':');
+			const size_t b = line.length();
+			if(x == string::npos) return ERROR_CODE::MISSING_HEADER_DELIM;
+			const string key = string(line.substr(a, x-a));
+			const string val = string(line.substr(x+1, b-(x+1)));
+			request.headers[to_lowercase_ascii(key)] = val;
+		}
+
+		return ERROR_CODE::SUCCESS;
+	}
+	ERROR_CODE parse_head(const string_view& head, http_response& response) {
+		size_t line_beg;
+		size_t line_end;
+		string_view line;
+		line_beg = 0;
+		line_end = head.find(HTTP_HEADER_NEWLINE, line_beg);
+		if(line_end == string::npos) return ERROR_CODE::MISSING_START_NEWLINE;
+		line = head.substr(line_beg, line_end - line_beg);
+
+		// parse start line.
+		{
+			size_t a,b;
+			a = 0;
+			b = line.find(' ', a);
+			if(b == string::npos) return ERROR_CODE::MISSING_START_DELIM;
+			response.protocol = to_uppercase_ascii_sv(line.substr(a, b-a));
+			a = b + 1;
+			b = line.find(' ', a);
+			if(b == string::npos) return ERROR_CODE::MISSING_START_DELIM;
+			response.status_code = string_to_int(line.substr(a, b-a));
+			a = b + 1;
+			b = line.length();
+			response.status_text = to_uppercase_ascii_sv(line.substr(a, b-a));
+		}
+
+		// parse headers.
+		while(true) {
+			line_beg = line_end + HTTP_HEADER_NEWLINE.length();
+			line_end = head.find(HTTP_HEADER_NEWLINE, line_beg);
+			if(line_end == string::npos) return ERROR_CODE::MISSING_HEADER_NEWLINE;
+			if(line_end == line_beg) break;
+			line = head.substr(line_beg, line_end - line_beg);
+			const size_t a = 0;
+			const size_t x = line.find(':');
+			const size_t b = line.length();
+			if(x == string::npos) return ERROR_CODE::MISSING_HEADER_DELIM;
+			const string key = string(line.substr(a, x-a));
+			const string val = string(line.substr(x+1, b-(x+1)));
+			response.headers[to_lowercase_ascii(key)] = val;
+		}
+
+		return ERROR_CODE::SUCCESS;
 	}
 
 
@@ -248,7 +338,7 @@ namespace HTTP {
 	}
 
 	ERROR_CODE send_http_request (HTTPConnection& connection, const http_request& request, MessageBuffer& headbuf, const MessageBuffer& bodybuf) {
-		append_start_line_request(headbuf, request.method, request.path, request.query, request.protocol);
+		append_start_line(headbuf, request);
 		append_headers(headbuf, request.headers);
 
 		// pack part of body into head (for better network utilization).
@@ -266,7 +356,7 @@ namespace HTTP {
 		return err;
 	}
 	ERROR_CODE send_http_response(HTTPConnection& connection, const http_response& response, MessageBuffer& headbuf, const MessageBuffer& bodybuf) {
-		append_start_line_response(headbuf, response.protocol, response.status_code);
+		append_start_line(headbuf, response);
 		append_headers(headbuf, response.headers);
 
 		// pack part of body into head (for better network utilization).
@@ -292,7 +382,7 @@ namespace HTTP {
 		if(err != ERROR_CODE::SUCCESS) return err;
 		request.head = recvbuf.view(0, head_length);
 
-		err = parse_start_line_request(recvbuf, request);
+		err = parse_start_line(recvbuf, request);
 		if(err != ERROR_CODE::SUCCESS) return err;
 		err = parse_headers(recvbuf, request.headers);
 		if(err != ERROR_CODE::SUCCESS) return err;
@@ -316,7 +406,7 @@ namespace HTTP {
 		if(err != ERROR_CODE::SUCCESS) return err;
 		response.head = recvbuf.view(0, head_length);
 
-		err = parse_start_line_response(recvbuf, response);
+		err = parse_start_line(recvbuf, response);
 		if(err != ERROR_CODE::SUCCESS) return err;
 		err = parse_headers(recvbuf, response.headers);
 		if(err != ERROR_CODE::SUCCESS) return err;
@@ -330,16 +420,6 @@ namespace HTTP {
 
 		response_length = head_length + content_length;
 		return ERROR_CODE::SUCCESS;
-	}
-
-	void send_cleanup(MessageBuffer& headbuf, MessageBuffer& bodybuf) {
-		headbuf.clear();
-		bodybuf.clear();
-		if(bodybuf.capacity > BUFFER_SHRINK_CAPACITY) bodybuf.set_capacity(BUFFER_SHRINK_CAPACITY);
-	}
-	void recv_cleanup(MessageBuffer& recvbuf, const size_t message_length) {
-		recvbuf.shift(message_length);
-		if(recvbuf.capacity > BUFFER_SHRINK_CAPACITY) recvbuf.set_capacity(std::max(recvbuf.length, BUFFER_SHRINK_CAPACITY));
 	}
 }
 

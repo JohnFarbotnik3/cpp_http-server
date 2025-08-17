@@ -58,7 +58,15 @@ namespace HTTP {
 		{}
 
 
-		void insert_connection(TCPConnection tcp_connection) {
+		void insert_connection_nonblocking(TCPConnection tcp_connection) {
+			// make socket non-blocking.
+			bool success = TCP::set_socket_nonblocking(tcp_connection.socket.fd, true);
+			if (!success) {
+				fprintf(stderr, "error: set_socket_nonblocking() failed (err: %s)\n", strerror(errno));
+				tcp_connection.close();
+				return;
+			}
+
 			HTTPConnection* http_connection = new HTTPConnection(tcp_connection, MAX_HEAD_LENGTH, MAX_HEAD_LENGTH, 0);
 			const int fd = tcp_connection.socket.fd;
 			connections.set(fd, http_connection);
@@ -69,13 +77,6 @@ namespace HTTP {
 			int status = epoll_ctl(polling_fd, EPOLL_CTL_ADD, fd, &ev);
 			if(status == -1) fprintf(stderr, "[insert_connection] epoll_ctl: %s\n", strerror(errno));
 		}
-		void re_arm_connection(int fd, EPOLL_EVENTS events) {
-			// re-arm fd in epool group.
-			epoll_event ev;
-			ev.events = EPOLL_EVENTS::EPOLLONESHOT | events;
-			int status = epoll_ctl(polling_fd, EPOLL_CTL_MOD, fd, &ev);
-			if(status == -1) fprintf(stderr, "[re_arm_connection] epoll_ctl: %s\n", strerror(errno));
-		}
 		void remove_connection(int fd) {
 			connections.remove(fd);
 
@@ -83,6 +84,84 @@ namespace HTTP {
 			epoll_event ev;
 			int status = epoll_ctl(polling_fd, EPOLL_CTL_DEL, fd, &ev);
 			if(status == -1) fprintf(stderr, "[remove_connection] epoll_ctl: %s\n", strerror(errno));
+
+			// close connection (if its still open).
+			close(fd);
+		}
+		void re_arm_connection(int fd, EPOLL_EVENTS events) {
+			// re-arm fd in epool group.
+			epoll_event ev;
+			ev.events = EPOLL_EVENTS::EPOLLONESHOT | events;
+			int status = epoll_ctl(polling_fd, EPOLL_CTL_MOD, fd, &ev);
+			if(status == -1) fprintf(stderr, "[re_arm_connection] epoll_ctl: %s\n", strerror(errno));
+		}
+		void re_arm_connection_recv(int fd) {
+			re_arm_connection(fd, EPOLL_EVENTS::EPOLLIN);
+		}
+		void re_arm_connection_send(int fd) {
+			re_arm_connection(fd, EPOLL_EVENTS::EPOLLOUT);
+		}
+
+
+		void on_soft_http_error(HTTPConnection& connection, const int status_code, const ERROR_CODE err) {
+			fprintf(stderr, "soft error during handle_connection(): %s\n", ERROR_MESSAGE.at(err).c_str());
+			fprintf(stderr, "most recent errno: %s\n", strerror(errno));
+
+			// attempt to notify client of server error.
+			http_response response;
+			response.protocol = HTTP_PROTOCOL_1_1;
+			response.status_code = status_code;
+			MessageBuffer headbuf(MAX_HEAD_LENGTH);
+			MessageBuffer bodybuf(0);
+			ERROR_CODE notify_err = send_http_response(connection, response, headbuf, bodybuf);
+		}
+		void on_hard_http_error(HTTPConnection& connection, const int status_code, const ERROR_CODE err) {
+			fprintf(stderr, "HARD ERROR during handle_connection(): %s\n", ERROR_MESSAGE.at(err).c_str());
+			fprintf(stderr, "most recent errno: %s\n", strerror(errno));
+
+			// attempt to notify client of server error.
+			http_response response;
+			response.protocol = HTTP_PROTOCOL_1_1;
+			response.status_code = status_code;
+			MessageBuffer headbuf(MAX_HEAD_LENGTH);
+			MessageBuffer bodybuf(0);
+			ERROR_CODE notify_err = send_http_response(connection, response, headbuf, bodybuf);
+		}
+
+
+		int try_recv(HTTPConnection& connection, char* dst, size_t& pos, const size_t end) {
+			ssize_t len;
+			while(pos < end) {
+				len = connection.recv(dst + pos, end - pos);
+				if(len > 0) pos += len;
+				else break;
+			}
+			if(len  < 0 && errno != EWOULDBLOCK) return -1;// error.
+			if(len == 0) return 0;// close.
+			return 1;// success.
+		}
+
+
+		void on_recv_close(HTTPConnection& connection) {
+			remove_connection(connection.tcp_connection.socket.fd);
+		}
+		void on_recv_error(HTTPConnection& connection) {
+			fprintf(stdout, "[worker_loop] error during recv.\n");
+			remove_connection(connection.tcp_connection.socket.fd);
+		}
+		int _recv_into_buffer(HTTPConnection& connection, MessageBuffer& buffer, const size_t expected_length) {
+			ssize_t len = 1;
+			while(buffer.length < expected_length) {
+				ssize_t len = connection.recv(buffer.data + buffer.length, expected_length - buffer.length);
+				if(len <= 0) break;
+				buffer.length += len;
+			}
+			// some data was read into buffer.
+			if(len > 0 || errno == EWOULDBLOCK) return 1;
+			// connection closed.
+			if(len == 0) return 0;
+			// an error occurred.
+			return -1;
 		}
 
 
@@ -95,7 +174,7 @@ namespace HTTP {
 				}
 
 				TCPConnection tcp_connection(new_socket);
-				server->insert_connection(tcp_connection);
+				server->insert_connection_nonblocking(tcp_connection);
 			}
 		}
 		static void accept_loop_TLS(HTTPServer* server, SSL_CTX *ctx, BIO* acceptor_bio) {
@@ -140,7 +219,7 @@ namespace HTTP {
 			BIO_get_fd(client_bio, &new_socket.fd);
 			TCP::get_peer_address_from_sockfd(new_socket.fd, new_socket.addr, new_socket.addrlen);
 			TCPConnection tcp_connection(new_socket, ssl);
-			server->insert_connection(tcp_connection);
+			server->insert_connection_nonblocking(tcp_connection);
 		}
 		static void polling_loop(HTTPServer* server) {
 			server->polling_fd = epoll_create1(0);
@@ -150,6 +229,7 @@ namespace HTTP {
 			}
 
 			while(true) {
+				if(server->shutting_down && server->connections.map.size() == 0) return;
 				std::array<epoll_event, 64> epoll_events;
 				int n_events = epoll_wait(server->polling_fd, epoll_events.data(), epoll_events.size(), server->polling_timeout);
 				if(n_events == -1) fprintf(stderr, "[polling_loop] epoll_wait: %s\n", strerror(errno));
@@ -166,37 +246,123 @@ namespace HTTP {
 			int status = close(server->polling_fd);
 			if(status == -1) fprintf(stderr, "[polling_loop] close: %s\n", strerror(errno));
 		}
-		// TODO - continue from here...
+		void worker_func(HTTPConnection* connection_ptr) {
+			HTTPConnection& connection = *connection_ptr;
+			const uint32_t events = connection.recent_epoll_events;
+			const int conn_fd = connection.tcp_connection.socket.fd;
+
+			if(events & EPOLL_EVENTS::EPOLLHUP) {
+				fprintf(stdout, "[worker_loop] connection closed. fd=%i\n", conn_fd);
+				remove_connection(conn_fd);
+				return;
+			}
+			if(events & EPOLL_EVENTS::EPOLLERR) {
+				fprintf(stderr, "[worker_loop] connection error occurred. fd=%i\n", conn_fd);
+				remove_connection(conn_fd);
+				return;
+			}
+
+			HTTP_CONNECTION_STATE& state = connection.state;
+			MessageBuffer& recvbuf = connection.recv_buffer;
+			MessageBuffer& headbuf = connection.head_buffer;
+			MessageBuffer& bodybuf = connection.body_buffer;
+			http_request& request = connection.request;
+			http_response& response = connection.response;
+
+			if(state == START_OF_CYCLE) {
+				connection.head_scan_cursor = 0;
+				state = WAITING_FOR_HEAD;
+			}
+
+			// TODO - continue from here...
+			if(state == WAITING_FOR_HEAD) {
+				const size_t HE_LEN = HTTP_HEADER_END.length();
+				size_t& scan_pos = connection.head_scan_cursor;
+				size_t end_pos;
+
+				// try to find end of header.
+				if(recvbuf.length >= HE_LEN) {
+					end_pos  = recvbuf.view().find(HTTP_HEADER_END, scan_pos);
+					scan_pos = recvbuf.length - HE_LEN;
+				}
+
+				// if not found, recv data until MAX_HEAD_LENGTH or EWOULDBLOCK.
+				if(end_pos == string::npos) {
+					int success = try_recv(connection, recvbuf.data, recvbuf.length, MAX_HEAD_LENGTH);
+					if(success == 0) return on_recv_close(connection);
+					if(success <  0) return on_recv_error(connection);
+
+					// try to find end of header.
+					if(recvbuf.length >= HE_LEN) {
+						end_pos  = recvbuf.view().find(HTTP_HEADER_END, scan_pos);
+						scan_pos = recvbuf.length - HE_LEN;
+					}
+				}
+
+				// if end found, parse head.
+				if(end_pos != string::npos) {
+					const size_t head_length = end_pos + HE_LEN;
+					connection.recv_length_head = head_length;
+					request.head = recvbuf.view(0, connection.recv_length_head);
+					const ERROR_CODE ec = parse_head(request.head, request);
+					if(ec) {
+						// mal-formatted request.
+						response.status_code = 400;
+						state = SOFT_ERROR;
+					} else {
+						const size_t body_length = get_content_length(request.headers);
+						connection.recv_length_body = body_length;
+						if(body_length > MAX_BODY_LENGTH) {
+							// body too long.
+							response.status_code = 413;
+							state = SOFT_ERROR;
+						} else {
+							state = body_length > 0 ? WAITING_FOR_BODY : READY_TO_PROCESS;
+						}
+					}
+				} else if(recvbuf.length >= MAX_HEAD_LENGTH) {
+					// head too long.
+					response.status_code = 431;
+					state = SOFT_ERROR;
+				} else {
+					// end not found, wait for more data.
+					re_arm_connection_recv(conn_fd);
+				}
+			}
+
+			if(state == HTTP_CONNECTION_STATE::WAITING_FOR_BODY) {
+				const size_t head_length = connection.recv_length_head;
+				const size_t body_length = connection.recv_length_body;
+				const size_t total_length = connection.recv_length_head + connection.recv_length_body;
+				if(recvbuf.length < total_length) {
+					int success = try_recv(connection, recvbuf.data, recvbuf.length, total_length);
+					if(success == 0) return on_recv_close(connection);
+					if(success <  0) return on_recv_error(connection);
+				}
+				if(recvbuf.length >= total_length) {
+					request.body = recvbuf.view(head_length, body_length);
+					state = READY_TO_PROCESS;
+				} else {
+					re_arm_connection_recv(conn_fd);
+				}
+			}
+
+			if(state == HTTP_CONNECTION_STATE::READY_TO_PROCESS) {}// TODO
+			if(state == HTTP_CONNECTION_STATE::WAITING_TO_SEND_HEAD) {}// TODO
+			if(state == HTTP_CONNECTION_STATE::WAITING_TO_SEND_BODY) {}// TODO
+			if(state == HTTP_CONNECTION_STATE::SOFT_ERROR) {}// TODO
+		}
 		static void worker_loop(HTTPServer* server) {
 			while(true) {
-				HTTPConnection& connection = *server->connections.get(server->work_queue.pop());
-				const auto events = connection.recent_epoll_events;
-				const int conn_fd = connection.tcp_connection.socket.fd;
-				if(events & (EPOLL_EVENTS::EPOLLIN | EPOLL_EVENTS::EPOLLOUT)) {
-					const HTTP_CONNECTION_STATE state = connection.state;
-					if(state == HTTP_CONNECTION_STATE::WAITING_FOR_HEAD) {}// TODO
-					if(state == HTTP_CONNECTION_STATE::WAITING_FOR_BODY) {}// TODO
-					if(state == HTTP_CONNECTION_STATE::BEING_PROCESSED) {}// TODO
-					if(state == HTTP_CONNECTION_STATE::WAITING_TO_SEND_HEAD) {}// TODO
-					if(state == HTTP_CONNECTION_STATE::WAITING_TO_SEND_BODY) {}// TODO
-				} else if(events & EPOLL_EVENTS::EPOLLHUP) {
-					fprintf(stdout, "[worker_loop] connection closed. fd=%i\n", conn_fd);
-					server->remove_connection(conn_fd);
-				} else if(events & EPOLL_EVENTS::EPOLLERR) {
-					fprintf(stderr, "[worker_loop] connection error occurred.\n");
-					server->remove_connection(conn_fd);
-				} else {
-					fprintf(stderr, "[worker_loop] unknown event: %x\n", events);
-					server->remove_connection(conn_fd);
-				}
-				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+				if(server->shutting_down && server->connections.map.size() == 0) return;
+				server->worker_func(server->connections.get(server->work_queue.pop()));
 			}
-		}// TODO
-		static void housekeeping_loop(HTTPServer* server) {
+		}
+		static void housekeeping_loop(HTTPServer* server) {// TODO
 			while(true) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 			}
-		}// TODO
+		}
 		void spawn_threads() {
 			polling_thread = std::thread(polling_loop, this);
 			for(int x=0;x<worker_thread_pool.size();x++) worker_thread_pool[x] = std::thread(worker_loop, this);
@@ -420,38 +586,11 @@ namespace HTTP {
 		}
 
 
-		void on_soft_http_error(HTTPConnection& connection, const int status_code, const ERROR_CODE err) {
-			fprintf(stderr, "soft error during handle_connection(): %s\n", ERROR_MESSAGE.at(err).c_str());
-			fprintf(stderr, "most recent errno: %s\n", strerror(errno));
-
-			// attempt to notify client of server error.
-			http_response response;
-			response.protocol = HTTP_PROTOCOL_1_1;
-			response.status_code = status_code;
-			MessageBuffer headbuf(MAX_HEAD_LENGTH);
-			MessageBuffer bodybuf(0);
-			ERROR_CODE notify_err = send_http_response(connection, response, headbuf, bodybuf);
-		}
-		void on_hard_http_error(HTTPConnection& connection, const int status_code, const ERROR_CODE err) {
-			fprintf(stderr, "HARD ERROR during handle_connection(): %s\n", ERROR_MESSAGE.at(err).c_str());
-			fprintf(stderr, "most recent errno: %s\n", strerror(errno));
-
-			// attempt to notify client of server error.
-			http_response response;
-			response.protocol = HTTP_PROTOCOL_1_1;
-			response.status_code = status_code;
-			MessageBuffer headbuf(MAX_HEAD_LENGTH);
-			MessageBuffer bodybuf(0);
-			ERROR_CODE notify_err = send_http_response(connection, response, headbuf, bodybuf);
-		}
 
 
 		void handle_connection(TCP::TCPConnection connection) {
 			HTTPConnection http_connection(connection, MAX_HEAD_LENGTH, MAX_HEAD_LENGTH, 0);
-			MessageBuffer& recvbuf = http_connection.recv_buffer;
-			MessageBuffer& headbuf = http_connection.head_buffer;
-			MessageBuffer& bodybuf = http_connection.body_buffer;
-			ERROR_CODE err;
+			// TODO...
 			try {
 				const string ipstr = TCP::get_address_string(connection.socket.addr);
 				printf("accepted HTTP connection | fd: %i, addr: %s\n", connection.socket.fd, ipstr.c_str());

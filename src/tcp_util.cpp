@@ -6,6 +6,7 @@
 #include <cstring>
 #include <string>
 #include <unistd.h>
+#include <fcntl.h>
 #include "src/tcp_structs.cpp"
 
 namespace TCP {
@@ -111,6 +112,19 @@ namespace TCP {
 		return std::string(buf);
 	}
 
+	bool set_socket_nonblocking(int fd, bool nonblocking) {
+		// https://stackoverflow.com/questions/1543466/how-do-i-change-a-tcp-socket-to-be-non-blocking
+		if(fd < 0) return false;
+		#ifdef _WIN32
+		unsigned long mode = blocking ? 0 : 1;
+		return (ioctlsocket(fd, FIONBIO, &mode) == 0);
+		#else
+		int flags = fcntl(fd, F_GETFL, 0);
+		if (flags == -1) return false;
+		flags = nonblocking ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
+		return (fcntl(fd, F_SETFL, flags) == 0);
+		#endif
+	}
 }
 
 #endif
