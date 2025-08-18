@@ -36,6 +36,19 @@ namespace HTTP {
 	const size_t BUFFER_SHRINK_CAPACITY = 64 * KB;
 
 
+	/* TODO: create optimized "server_req/res" and "client_req/res" variants.
+		* move head & body buffer into send-structs.
+		* move recv buffer into recv-structs.
+		* add build/append methods so that send data is populated more efficiently.
+		- switch from using string-string map to using string_views
+			to reduce number of heap allocations.
+		- on recv-side, nearly all of the strings can be string_views instead.
+		- content-length can be a size_t instead of a string header.
+			(after parsing headers, extract content-length from map.)
+		- status_text field is not needed in response struct.
+			(status_code is sufficient.)
+		- method and protocol can be enums.
+	*/
 	using header_dict = std::map<string, string>;
 	struct http_request {
 		string_view	head;
@@ -47,6 +60,10 @@ namespace HTTP {
 		string		protocol;
 		// headers.
 		header_dict	headers;
+
+		void clear() {
+			headers.clear();
+		}
 	};
 	struct http_response {
 		string_view	head;
@@ -57,6 +74,10 @@ namespace HTTP {
 		string	status_text;
 		// headers.
 		header_dict	headers;
+
+		void clear() {
+			headers.clear();
+		}
 	};
 
 
@@ -78,20 +99,21 @@ namespace HTTP {
 		TCP::TCPConnection tcp_connection;
 		uint32_t recent_epoll_events;
 		HTTP_CONNECTION_STATE state = START_OF_CYCLE;
+
 		MessageBuffer recv_buffer;
 		MessageBuffer head_buffer;
 		MessageBuffer body_buffer;
 		size_t head_scan_cursor;// scan start-position when searching for end of message-head.
-		size_t recv_length_head;// length of head.
-		size_t recv_length_body;// expected length of body.
+		size_t buf_shift_length;// amount to shift recv_buffer by at end of cycle.
 		size_t send_head_cursor;// amount of head data sent.
 		size_t send_body_cursor;// amount of body data sent.
-		http_request request;
+		http_request  request;
 		http_response response;
+
 		time64_ns date_created = time64_ns::now();
-		//time64_ns dt_recv = 0;
-		//time64_ns dt_work = 0;
-		//time64_ns dt_send = 0;
+		time64_ns dt_recv;
+		time64_ns dt_work;
+		time64_ns dt_send;
 
 
 		HTTPConnection(TCP::TCPConnection tcp_connection, size_t rbuf_size, size_t hbuf_size, size_t bbuf_size) :
