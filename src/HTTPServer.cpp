@@ -36,6 +36,7 @@ namespace HTTP {
 	using std::string;
 	using utils::time_util::time64_ns;
 	using TCP::TCPSocket;
+	using TCP::TCPConnection;
 	namespace fs = std::filesystem;
 
 	struct HTTPServer {
@@ -79,7 +80,6 @@ namespace HTTP {
 		}
 		void remove_connection(HTTPConnection* connection) {
 			const int fd = connection->fd();
-			connections.remove(fd);
 
 			// remove from epoll group.
 			epoll_event ev;
@@ -87,9 +87,10 @@ namespace HTTP {
 			if(status == -1) fprintf(stderr, "[remove_connection] epoll_ctl: %s\n", strerror(errno));
 
 			// close connection (if its still open).
-			close(fd);
+			connection->tcp_connection.close();
 
 			// free connection memory.
+			connections.remove(fd);
 			delete connection;
 		}
 		void re_arm_connection(int fd, EPOLL_EVENTS events) {
@@ -135,10 +136,24 @@ namespace HTTP {
 		}
 
 		// send+recv functions.
-		int recv_until_block(HTTPConnection& connection, char* dst, size_t& pos, const size_t end) {
-			ssize_t len;
+		int recv_until_block(HTTPConnection& connection, char* data, size_t& pos, const size_t end) {
+			ssize_t len = 1;
 			while(pos < end) {
-				len = connection.recv(dst + pos, end - pos);
+				len = connection.recv(data + pos, end - pos);
+				if(len > 0) pos += len;
+				else break;
+			}
+			// error.
+			if(len  < 0 && errno != EWOULDBLOCK) return -1;
+			// socket closed.
+			if(len == 0) return 0;
+			// success.
+			return 1;
+		}
+		int send_until_block(HTTPConnection& connection, const char* data, size_t& pos, const size_t end) {
+			ssize_t len = 1;
+			while(pos < end) {
+				len = connection.send(data + pos, end - pos);
 				if(len > 0) pos += len;
 				else break;
 			}
@@ -239,14 +254,13 @@ namespace HTTP {
 			int status = close(server->polling_fd);
 			if(status == -1) fprintf(stderr, "[polling_loop] close: %s\n", strerror(errno));
 		}
-
-		// TODO - check to see if its actually okay to use "chained return void-call" style.
-		// TODO ^ returning next-state and using a "do while" loop in main worker_func is another option.
 		void worker_func_cycle_start(HTTPConnection& connection) {
 			connection.head_scan_cursor = 0;
-			return worker_func_waiting_for_head(connection);
+			connection.send_head_cursor = 0;
+			connection.send_body_cursor = 0;
+			return worker_func_recv_head(connection);
 		}
-		void worker_func_waiting_for_head(HTTPConnection& connection) {
+		void worker_func_recv_head(HTTPConnection& connection) {
 			const size_t HE_LEN = HTTP_HEADER_END.length();
 			MessageBuffer& recvbuf = connection.recv_buffer;
 
@@ -275,7 +289,7 @@ namespace HTTP {
 					// check if head is too long.
 					if(recvbuf.length >= MAX_HEAD_LENGTH) {
 						// TODO - check if URI is too long first to give more specific status-code.
-						return worker_func_soft_error(connection, 431);// header fields too long.
+						return worker_func_soft_error_init(connection, 431);// header fields too long.
 					} else {
 						// wait for more data.
 						return re_arm_connection_recv(connection, WAITING_FOR_HEAD);
@@ -289,21 +303,24 @@ namespace HTTP {
 			connection.recv_length_head = end_pos + HE_LEN;
 			request.head = recvbuf.view(0, connection.recv_length_head);
 			const ERROR_CODE ec = parse_head(request.head, request);
-			if(ec) return worker_func_soft_error(connection, 400);// mal-formatted request.
+			if(ec) return worker_func_soft_error_init(connection, 400);// mal-formatted request.
 
-			const size_t body_length = get_content_length(request.headers);
+			const size_t body_length = request.headers.contains(HEADERS::content_length)
+				? string_to_int(request.headers.at(HEADERS::content_length))
+				: 0;
 			connection.recv_length_body = body_length;
-			if(body_length > MAX_BODY_LENGTH) return worker_func_soft_error(connection, 413);// body too long.
-			if(body_length > 0)	return worker_func_waiting_for_body(connection);
+			if(body_length > MAX_BODY_LENGTH) return worker_func_soft_error_init(connection, 413);// body too long.
+			if(body_length > 0)	return worker_func_recv_body(connection);
 			else				return worker_func_handle_request(connection);
 		}
-		void worker_func_waiting_for_body(HTTPConnection& connection) {
+		void worker_func_recv_body(HTTPConnection& connection) {
 			MessageBuffer& recvbuf = connection.recv_buffer;
 
 			const size_t head_length = connection.recv_length_head;
 			const size_t body_length = connection.recv_length_body;
 			const size_t total_length = head_length + body_length;
 			if(recvbuf.length < total_length) {
+				recvbuf.reserve(total_length);
 				int success = recv_until_block(connection, recvbuf.data, recvbuf.length, total_length);
 				if(success == 0) return on_socket_close(connection);
 				if(success <  0) return on_socket_error(connection);
@@ -317,18 +334,97 @@ namespace HTTP {
 				return re_arm_connection_recv(connection, WAITING_FOR_BODY);
 			}
 		}
-		void worker_func_handle_request(HTTPConnection& connection) {}// TODO
-		void worker_func_send_head(HTTPConnection& connection) {}// TODO
-		void worker_func_send_body(HTTPConnection& connection) {}// TODO
-		void worker_func_cycle_end(HTTPConnection& connection) {// TODO
-			// TODO - cleanup.
+		void worker_func_handle_request(HTTPConnection& connection) {
+			handle_request(connection);
+			worker_func_send_head(connection);
+		}
+		virtual http_response handle_request(HTTPConnection& connection) {// TODO
+			int status_code = 200;
+			string data = "test abc 123 :)";
+			body_buffer.append(data);
+			response.headers[HEADERS::content_type] = get_mime_type(".txt");
+			response.headers[HEADERS::content_length] = int_to_string(data.length());
+			return response;
+		}
+		void worker_func_send_head(HTTPConnection& connection) {
+			// OPTIMIZATION: pack some of body into head for more efficient transmission.
+			if(connection.body_buffer.length > 0) {
+				MessageBuffer& headbuf = connection.head_buffer;
+				MessageBuffer& bodybuf = connection.body_buffer;
+
+				// copy data from body_buffer to head_buffer.
+				size_t pack_length = std::min(headbuf.length + bodybuf.length, MAX_PACK_LENGTH);
+				size_t copy_length = pack_length - headbuf.length;
+				headbuf.reserve(pack_length);
+				memcpy(headbuf.data + headbuf.length, bodybuf.data, copy_length * sizeof(bodybuf.data[0]));
+
+				// update cursors and lengths.
+				headbuf.length += copy_length;
+				connection.send_body_cursor += copy_length;
+			}
+
+			// send head.
+			MessageBuffer& buffer = connection.head_buffer;
+			size_t& cursor = connection.send_head_cursor;
+			if(buffer.length == 0) worker_func_send_body(connection);
+
+			int success = send_until_block(connection, buffer.data, cursor, buffer.length);
+			if(success == 0) return on_socket_close(connection);
+			if(success <  0) return on_socket_error(connection);
+
+			if(cursor == buffer.length) worker_func_send_body(connection);
+			else re_arm_connection_send(connection, WAITING_TO_SEND_HEAD);
+		}
+		void worker_func_send_body(HTTPConnection& connection) {
+			MessageBuffer& buffer = connection.body_buffer;
+			size_t& cursor = connection.send_body_cursor;
+			if(buffer.length == 0) worker_func_send_body(connection);
+
+			int success = send_until_block(connection, buffer.data, cursor, buffer.length);
+			if(success == 0) return on_socket_close(connection);
+			if(success <  0) return on_socket_error(connection);
+
+			if(cursor == buffer.length) worker_func_cycle_end(connection);
+			else re_arm_connection_send(connection, WAITING_TO_SEND_BODY);
+		}
+		void worker_func_soft_error_init(HTTPConnection& connection, const int status_code) {
+			// replace head buffer contents with error response.
+			http_response response;
+			response.status_code = status_code;
+			response.status_text = STATUS_CODES.at(status_code);
+			connection.head_buffer.clear();
+			append_head(connection.head_buffer, response);
+
+			connection.send_head_cursor = 0;
+			return worker_func_soft_error_send(connection);
+		}
+		void worker_func_soft_error_send(HTTPConnection& connection) {
+			MessageBuffer& buffer = connection.head_buffer;
+			size_t& cursor = connection.send_head_cursor;
+
+			int success = send_until_block(connection, buffer.data, cursor, buffer.length);
+			if(success == 0) return on_socket_close(connection);
+			if(success <  0) return on_socket_error(connection);
+
+			if(cursor == buffer.length) worker_func_cycle_end(connection);
+			else re_arm_connection_send(connection, SOFT_ERROR);
+		}
+		void worker_func_cycle_end(HTTPConnection& connection) {
+			// cleanup buffers.
+			MessageBuffer& recv_buffer = connection.recv_buffer;
+			MessageBuffer& head_buffer = connection.head_buffer;
+			MessageBuffer& body_buffer = connection.body_buffer;
+			recv_buffer.shift(connection.recv_length_head + connection.recv_length_body);
+			head_buffer.clear();
+			body_buffer.clear();
+			if(recv_buffer.capacity > BUFFER_SHRINK_CAPACITY) recv_buffer.set_capacity(std::max(recv_buffer.length, BUFFER_SHRINK_CAPACITY));
+			if(body_buffer.capacity > BUFFER_SHRINK_CAPACITY) body_buffer.set_capacity(BUFFER_SHRINK_CAPACITY);
+			// clear request & response structures.
+			connection.request = http_request();
+			connection.response = http_response();
+			// set next state.
 			connection.state = START_OF_CYCLE;
 		}
-		void worker_func_soft_error(HTTPConnection& connection, const int status_code) {
-			connection.response.status_code = status_code;
-			return worker_func_soft_error(connection);
-		}
-		void worker_func_soft_error(HTTPConnection& connection) {}// TODO
 		void worker_func() {
 			HTTPConnection* connection_ptr = connections.get(work_queue.pop());
 			HTTPConnection& connection = *connection_ptr;
@@ -348,11 +444,11 @@ namespace HTTP {
 
 			HTTP_CONNECTION_STATE& state = connection.state;
 			//if(state == START_OF_CYCLE) worker_func_cycle_start(connection);
-			if(state == WAITING_FOR_HEAD) worker_func_waiting_for_head(connection);
-			if(state == WAITING_FOR_BODY) worker_func_waiting_for_body(connection);
+			if(state == WAITING_FOR_HEAD) worker_func_recv_head(connection);
+			if(state == WAITING_FOR_BODY) worker_func_recv_body(connection);
 			if(state == WAITING_TO_SEND_HEAD) worker_func_send_head(connection);
 			if(state == WAITING_TO_SEND_BODY) worker_func_send_body(connection);
-			if(state == SOFT_ERROR) worker_func_soft_error(connection);
+			if(state == SOFT_ERROR) worker_func_soft_error_send(connection);
 			while(state == START_OF_CYCLE) worker_func_cycle_start(connection);
 		}
 		static void worker_loop(HTTPServer* server) {
@@ -377,6 +473,7 @@ namespace HTTP {
 			printf("shutting down: accept thread.\n");
 			accept_thread.join();
 			printf("shutting down: worker threads.\n");
+			// TODO - find way to add shutdown tasks to worker thread poll.
 			for(int x=0;x<worker_thread_pool.size();x++) worker_thread_pool[x].join();
 			printf("shutting down: polling thread.\n");
 			polling_thread.join();
@@ -579,18 +676,9 @@ namespace HTTP {
 		}
 
 
-		void accept_connection(TCPConnection new_connection) {
-			this->handle_connection(new_connection);
-			new_connection.close();
-		}
-		void accept_connection_TLS(TCPConnection new_connection) {
-			this->handle_connection(new_connection);
-			new_connection.close();
-		}
 
 
-
-
+		// TODO - get relevant logs and perf metrics and move to related worker functions.
 		void handle_connection(TCP::TCPConnection connection) {
 			HTTPConnection http_connection(connection, MAX_HEAD_LENGTH, MAX_HEAD_LENGTH, 0);
 			// TODO...
@@ -604,9 +692,7 @@ namespace HTTP {
 					// get request.
 					http_request request;
 					size_t request_length;
-					http_connection.on_recv_starting();
 					err = recv_http_request(http_connection, recvbuf, request, request_length);
-					http_connection.on_recv_finished();
 					if(err != ERROR_CODE::SUCCESS) { on_soft_http_error(http_connection, 400, err); break; }
 
 					// generate response.
@@ -616,9 +702,7 @@ namespace HTTP {
 					time64_ns dt_handle = time64_ns::now() - t0;
 
 					// send response.
-					http_connection.on_send_starting();
 					err = send_http_response(http_connection, response, headbuf, bodybuf);
-					http_connection.on_send_finished();
 					if(err != ERROR_CODE::SUCCESS) { on_soft_http_error(http_connection, 500, err); break; }
 					time64_ns dt_send = http_connection.send_t1 - http_connection.send_t0;
 
@@ -651,15 +735,7 @@ namespace HTTP {
 				}
 			}
 		}
-		virtual http_response handle_request(const http_request& request, MessageBuffer& body_buffer) {
-			http_response response;
-			int status_code = 200;
-			string data = "test abc 123 :)";
-			response.headers[HEADERS::content_type] = get_mime_type(".txt");
-			response.headers[HEADERS::content_length] = int_to_string(data.length());
-			body_buffer.append(data);
-			return response;
-		}
+
 	};
 }
 
