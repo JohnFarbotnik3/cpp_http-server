@@ -15,7 +15,6 @@ https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Messages
 #include <thread>
 #include <filesystem>
 
-#include "src/tcp_structs.cpp"
 #include "src/tcp_util.cpp"
 #include "src/http_util.cpp"
 #include "src/definitions/mime_types.cpp"
@@ -51,7 +50,7 @@ namespace HTTP {
 		int polling_timeout;
 		bool shutting_down;
 
-		HTTPServer(const string hostname, const string portname, const int n_accept_threads, const int n_worker_threads):
+		HTTPServer(const string hostname, const string portname, const int n_worker_threads):
 			hostname(hostname),
 			portname(portname),
 			worker_thread_pool(n_worker_threads),
@@ -60,10 +59,11 @@ namespace HTTP {
 
 		// connection and socket functions.
 		void insert_connection_nonblocking(TCPConnection tcp_connection) {
+			// TODO - continue non-blocking fixes from here...
 			// make socket non-blocking.
-			bool success = TCP::set_socket_nonblocking(tcp_connection.socket.fd, true);
+			bool success = tcp_connection.set_nonblocking(true);
 			if (!success) {
-				fprintf(stderr, "error: set_socket_nonblocking() failed (err: %s)\n", strerror(errno));
+				fprintf(stderr, "error: set_nonblocking() failed (err: %s)\n", strerror(errno));
 				tcp_connection.close();
 				return;
 			}
@@ -74,6 +74,7 @@ namespace HTTP {
 
 			// add to epoll group.
 			epoll_event ev;
+			ev.data.fd = fd;
 			ev.events = EPOLL_EVENTS::EPOLLONESHOT | EPOLL_EVENTS::EPOLLIN;
 			int status = epoll_ctl(polling_fd, EPOLL_CTL_ADD, fd, &ev);
 			if(status == -1) fprintf(stderr, "[insert_connection] epoll_ctl: %s\n", strerror(errno));
@@ -83,6 +84,7 @@ namespace HTTP {
 
 			// remove from epoll group.
 			epoll_event ev;
+			ev.data.fd = fd;
 			int status = epoll_ctl(polling_fd, EPOLL_CTL_DEL, fd, &ev);
 			if(status == -1) fprintf(stderr, "[remove_connection] epoll_ctl: %s\n", strerror(errno));
 
@@ -99,6 +101,7 @@ namespace HTTP {
 		void re_arm_connection(int fd, EPOLL_EVENTS events) {
 			// re-arm fd in epool group.
 			epoll_event ev;
+			ev.data.fd = fd;
 			ev.events = EPOLL_EVENTS::EPOLLONESHOT | events;
 			int status = epoll_ctl(polling_fd, EPOLL_CTL_MOD, fd, &ev);
 			if(status == -1) fprintf(stderr, "[re_arm_connection] epoll_ctl: %s\n", strerror(errno));
@@ -111,40 +114,17 @@ namespace HTTP {
 			connection.state = new_state;
 			re_arm_connection(connection.fd(), EPOLL_EVENTS::EPOLLOUT);
 		}
-
-
-		// send+recv functions.
-		int recv_until_block(HTTPConnection& connection, char* data, size_t& pos, const size_t end) {
+		int recv_until_block(HTTPConnection& connection, char* data, size_t& pos, const size_t size) {
 			time64_ns t0 = time64_ns::now();
-			ssize_t len = 1;
-			while(pos < end) {
-				len = connection.recv(data + pos, end - pos);
-				if(len > 0) pos += len;
-				else break;
-			}
+			int status = connection.recv_all(data, pos, size);
 			connection.dt_recv = connection.dt_recv + (time64_ns::now() - t0);
-			// error.
-			if(len  < 0 && errno != EWOULDBLOCK) return -1;
-			// socket closed.
-			if(len == 0) return 0;
-			// success.
-			return 1;
+			return status;
 		}
-		int send_until_block(HTTPConnection& connection, const char* data, size_t& pos, const size_t end) {
+		int send_until_block(HTTPConnection& connection, const char* data, size_t& pos, const size_t size) {
 			time64_ns t0 = time64_ns::now();
-			ssize_t len = 1;
-			while(pos < end) {
-				len = connection.send(data + pos, end - pos);
-				if(len > 0) pos += len;
-				else break;
-			}
+			int status = connection.send_all(data, pos, size);
 			connection.dt_send = connection.dt_send + (time64_ns::now() - t0);
-			// error.
-			if(len  < 0 && errno != EWOULDBLOCK) return -1;
-			// socket closed.
-			if(len == 0) return 0;
-			// success.
-			return 1;
+			return status;
 		}
 		void on_socket_close(HTTPConnection& connection) {
 			remove_connection(&connection);
@@ -167,7 +147,7 @@ namespace HTTP {
 				server->insert_connection_nonblocking(tcp_connection);
 			}
 		}
-		static void accept_loop_TLS(HTTPServer* server, SSL_CTX *ctx, BIO* acceptor_bio) {
+		static void accept_loop_TLS(HTTPServer* server, SSL_CTX* ctx, BIO* acceptor_bio) {
 			while(true) {
 				/* Pristine error stack for each new connection */
 				ERR_clear_error();
@@ -178,15 +158,16 @@ namespace HTTP {
 					continue;
 				}
 
-				std::thread handshake_thread(accept_loop_TLS_handshake_func, server, ctx, acceptor_bio);
-				handshake_thread.detach();
+				/* Pop the client connection from the BIO chain */
+				BIO* client_bio = BIO_pop(acceptor_bio);
+				fprintf(stderr, "New client connection accepted\n");
+
+				accept_loop_TLS_handshake_func(server, ctx, client_bio);// TODO TEST
+				//std::thread handshake_thread(accept_loop_TLS_handshake_func, server, ctx, acceptor_bio);
+				//handshake_thread.detach();
 			}
 		}
-		static void accept_loop_TLS_handshake_func(HTTPServer* server, SSL_CTX *ctx, BIO* acceptor_bio) {
-			/* Pop the client connection from the BIO chain */
-			BIO* client_bio = BIO_pop(acceptor_bio);
-			fprintf(stderr, "New client connection accepted\n");
-
+		static void accept_loop_TLS_handshake_func(HTTPServer* server, SSL_CTX* ctx, BIO* client_bio) {
 			/* Associate a new SSL handle with the new connection */
 			SSL* ssl = SSL_new(ctx);
 			if (ssl == NULL) {
@@ -250,7 +231,7 @@ namespace HTTP {
 			MessageBuffer& recvbuf = connection.recv_buffer;
 
 			// check if there is already a completed head in buffer.
-			size_t end_pos;
+			size_t end_pos = string::npos;
 			if(recvbuf.length > HE_LEN) {
 				end_pos = recvbuf.view().find(HTTP_HEADER_END, connection.head_scan_cursor);
 				connection.head_scan_cursor = recvbuf.length - HE_LEN;
@@ -265,7 +246,7 @@ namespace HTTP {
 
 				// try to find end of head again.
 				if(recvbuf.length > HE_LEN) {
-					const size_t end_pos = recvbuf.view().find(HTTP_HEADER_END, connection.head_scan_cursor);
+					end_pos = recvbuf.view().find(HTTP_HEADER_END, connection.head_scan_cursor);
 					connection.head_scan_cursor = recvbuf.length - HE_LEN;
 				}
 
@@ -287,7 +268,9 @@ namespace HTTP {
 			request.clear();
 
 			const size_t head_length = end_pos + HE_LEN;
+			connection.buf_shift_length = head_length;
 			request.head = recvbuf.view(0, head_length);
+
 			const ERROR_CODE ec = parse_head(request.head, request);
 			if(ec) return worker_func_init_soft_error(connection, 400);// mal-formatted request.
 
@@ -320,9 +303,10 @@ namespace HTTP {
 		}
 		void worker_func_handle_request(HTTPConnection& connection) {
 			time64_ns t0 = time64_ns::now();
-			handle_request(connection, connection.response, connection.body_buffer);
+			handle_request(connection, connection.request, connection.response, connection.body_buffer);
 			connection.dt_work = connection.dt_work + (time64_ns::now() - t0);
 
+			append_head(connection.head_buffer, connection.response);
 			connection.response.head = connection.head_buffer.view();
 			connection.response.body = connection.body_buffer.view();
 
@@ -344,7 +328,7 @@ namespace HTTP {
 
 			worker_func_send_head(connection);
 		}
-		virtual void handle_request(const HTTPConnection& connection, http_response& response, MessageBuffer& body_buffer) {
+		virtual void handle_request(const HTTPConnection& connection, const http_request& request, http_response& response, MessageBuffer& body_buffer) {
 			string data = "test abc 123 :)";
 
 			response.clear();
@@ -358,25 +342,25 @@ namespace HTTP {
 		void worker_func_send_head(HTTPConnection& connection) {
 			MessageBuffer& buffer = connection.head_buffer;
 			size_t& cursor = connection.send_head_cursor;
-			if(buffer.length == 0) worker_func_send_body(connection);
+			if(buffer.length == 0) return worker_func_send_body(connection);
 
 			int success = send_until_block(connection, buffer.data, cursor, buffer.length);
 			if(success == 0) return on_socket_close(connection);
 			if(success <  0) return on_socket_error(connection);
 
-			if(cursor == buffer.length) worker_func_send_body(connection);
+			if(cursor == buffer.length) return worker_func_send_body(connection);
 			else re_arm_connection_send(connection, WAITING_TO_SEND_HEAD);
 		}
 		void worker_func_send_body(HTTPConnection& connection) {
 			MessageBuffer& buffer = connection.body_buffer;
 			size_t& cursor = connection.send_body_cursor;
-			if(buffer.length == 0) worker_func_send_body(connection);
+			if(buffer.length == 0) return worker_func_cycle_end(connection);
 
 			int success = send_until_block(connection, buffer.data, cursor, buffer.length);
 			if(success == 0) return on_socket_close(connection);
 			if(success <  0) return on_socket_error(connection);
 
-			if(cursor == buffer.length) worker_func_cycle_end(connection);
+			if(cursor == buffer.length) return worker_func_cycle_end(connection);
 			else re_arm_connection_send(connection, WAITING_TO_SEND_BODY);
 		}
 		void worker_func_init_soft_error(HTTPConnection& connection, const int status_code) {

@@ -9,7 +9,7 @@
 #include "src/utils/config_util.cpp"
 #include "src/http_util.cpp"
 
-
+// TODO - add shared map with paths of locked files to prevent read/write collisions.
 namespace HTTP::Handlers::static_file_server {
 	using std::string;
 	namespace fio = utils::file_io;
@@ -51,9 +51,8 @@ namespace HTTP::Handlers::static_file_server {
 			}
 		}
 
-		http_response return_status(http_response& response, const int status_code) {
+		void return_status(http_response& response, const int status_code) {
 			response.status_code = status_code;
-			return response;
 		}
 		size_t append_file(MessageBuffer& bodybuf, const path target) {
 			std::ifstream file(target, std::ios::binary | std::ios::ate);
@@ -72,8 +71,10 @@ namespace HTTP::Handlers::static_file_server {
 			}
 		}
 
-		http_response handle_request(const http_request& request, MessageBuffer& body_buffer) {
-			http_response response;
+		void handle_request(const HTTPConnection& connection, const http_request& request, http_response& response, MessageBuffer& body_buffer) {
+			response.clear();
+			body_buffer.clear();
+
 			response.protocol = HTTP_PROTOCOL_1_1;
 			response.headers[HTTP::HEADERS::content_length] = "0";
 
@@ -158,10 +159,10 @@ namespace HTTP::Handlers::static_file_server {
 	struct HTTPFileServer : HTTP::HTTPServer {
 		static_file_server_struct sfs;
 
-		HTTPFileServer(const string hostname, const string portname, static_file_server_config config) : HTTPServer(hostname, portname), sfs(config) {}
+		HTTPFileServer(const string hostname, const string portname, const int n_worker_threads, static_file_server_config config) : HTTPServer(hostname, portname, n_worker_threads), sfs(config) {}
 
-		http_response handle_request(const http_request& request, MessageBuffer& body_buffer) override {
-			return sfs.handle_request(request, body_buffer);
+		void handle_request(const HTTPConnection& connection, const http_request& request, http_response& response, MessageBuffer& body_buffer) override {
+			return sfs.handle_request(connection, request, response, body_buffer);
 		}
 	};
 }

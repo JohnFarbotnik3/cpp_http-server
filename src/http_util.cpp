@@ -9,7 +9,7 @@
 #include <string_view>
 #include <map>
 #include "src/utils/string_util.cpp"
-#include "src/definitions/headers.cpp"
+//#include "src/definitions/headers.cpp"
 #include "src/definitions/status_codes.cpp"
 
 //#include <sys/epoll.h>
@@ -127,11 +127,11 @@ namespace HTTP {
 			return tcp_connection.socket.fd;
 		}
 
-		ssize_t send(const char* src, const size_t count) {
-			return tcp_connection.send(src, count);
+		int send_all(const char* data, size_t& pos, const size_t size) {
+			return tcp_connection.send_all(data, pos, size);
 		}
-		ssize_t recv(char* dst, const size_t count) {
-			return tcp_connection.recv(dst, count);
+		int recv_all(char* data, size_t& pos, const size_t size) {
+			return tcp_connection.recv_all(data, pos, size);
 		}
 	};
 

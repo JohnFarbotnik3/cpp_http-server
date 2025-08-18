@@ -57,6 +57,35 @@ u_int32_t	sin6_scope_id;	// Scope ID
 */
 	using addrinfo = addrinfo;
 
+
+
+	bool set_socket_nonblocking(int fd, bool nonblocking) {
+		// https://stackoverflow.com/questions/1543466/how-do-i-change-a-tcp-socket-to-be-non-blocking
+		if(fd < 0) return false;
+		#ifdef _WIN32
+		unsigned long mode = blocking ? 0 : 1;
+		return (ioctlsocket(fd, FIONBIO, &mode) == 0);
+		#else
+		int flags = fcntl(fd, F_GETFL, 0);
+		if (flags == -1) return false;
+		flags = nonblocking ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
+		return (fcntl(fd, F_SETFL, flags) == 0);
+		#endif
+	}
+	int get_ssl_error_status(SSL* ssl, int ret_code) {
+		switch (SSL_get_error(ssl, ret_code)) {
+			case SSL_ERROR_WANT_READ: return 1;// would block on read.
+			case SSL_ERROR_WANT_WRITE: return 1;// would block on write.
+			case SSL_ERROR_ZERO_RETURN: return 0;// no more data to read (but write may still be possible).
+			case SSL_ERROR_SYSCALL: return -1;
+			case SSL_ERROR_SSL:// SSL related error happened.
+				if (SSL_get_verify_result(ssl) != X509_V_OK) printf("Verify error: %s\n", X509_verify_cert_error_string(SSL_get_verify_result(ssl)));
+				return -1;
+			default: return -1;
+		}
+	}
+
+
 	struct TCPSocket {
 		int					fd;
 		sockaddr_storage	addr;
@@ -71,23 +100,75 @@ u_int32_t	sin6_scope_id;	// Scope ID
 		TCPConnection(const TCPSocket& socket) : socket(socket) {}
 		TCPConnection(const TCPSocket& socket, SSL* ssl) : socket(socket), ssl(ssl) {}
 
-		ssize_t send(const char* src, const size_t count) {
-			if(ssl != nullptr) {
-				size_t len;
-				int status = SSL_write_ex(ssl, src, count, &len);
-				return len;
+		int send_all(const char* data, size_t& pos, const size_t size) {
+			if(ssl == nullptr) {
+				ssize_t len;
+				while(pos < size) {
+					len = ::send(socket.fd, data+pos, size-pos, 0);
+					if(len > 0) pos += len; else break;
+				}
+				if(pos == size || errno == EWOULDBLOCK) return 1;// success or blocked.
+				if(len == 0) return 0;// socket closed.
+				return -1;// error.
 			} else {
-				return ::send(socket.fd, src, count, 0);
+				int len;
+				while(pos < size) {
+					int len = SSL_write(ssl, data+pos, size-pos);
+					if(len > 0) pos += len; else break;
+				}
+				if(pos == size || errno == EWOULDBLOCK) return 1;// success or blocked.
+				if(len == 0) return 0;// socket closed.
+				return -1;// error.
+			}
+		}
+		int recv_all(char* data, size_t& pos, const size_t size) {
+			if(ssl == nullptr) {
+				ssize_t len;
+				while(pos < size) {
+					len = ::recv(socket.fd, data+pos, size-pos, 0);
+					if(len > 0) pos += len; else break;
+				}
+				if(pos == size || errno == EWOULDBLOCK) return 1;// success or blocked.
+				if(len == 0) return 0;// socket closed.
+				return -1;// error.
+			} else {
+				int len;
+				while(pos < size) {
+					int len = SSL_read(ssl, data+pos, size-pos);
+					if(len > 0) pos += len; else break;
+				}
+				if(pos == size || errno == EWOULDBLOCK) return 1;// success or blocked.
+				if(len == 0) return 0;// socket closed.
+				return -1;// error.
 			}
 		}
 
-		ssize_t recv(char* dst, const size_t count) {
+		// WARNING: do not use this with non-blocking sockets.
+		ssize_t _send(const char* data, const size_t count) {
 			if(ssl != nullptr) {
-				size_t len;
-				int status = SSL_read_ex(ssl, dst, count, &len);
-				return len;
+				/*
+				size_t len = 0;
+				int ret_code = SSL_write_ex(ssl, src, count, &len);
+				return ret_code > 0 ? len : get_ssl_error_status(ssl, ret_code);
+				*/
+				int len = SSL_write(ssl, data, count);
+				return len > 0 ? len : get_ssl_error_status(ssl, len);
 			} else {
-				return ::recv(socket.fd, dst, count, 0);
+				return ::send(socket.fd, data, count, 0);
+			}
+		}
+
+		// WARNING: do not use this with non-blocking sockets.
+		ssize_t _recv(char* data, const size_t count) {
+			if(ssl != nullptr) {
+				/*
+				size_t len = 0;
+				int ret_code = SSL_read_ex(ssl, dst, count, &len);
+				return ret_code > 0 ? len : get_ssl_error_status(ssl, ret_code);
+				*/
+				return SSL_read(ssl, data, count);
+			} else {
+				return ::recv(socket.fd, data, count, 0);
 			}
 		}
 
@@ -97,6 +178,10 @@ u_int32_t	sin6_scope_id;	// Scope ID
 			} else {
 				::close(socket.fd);
 			}
+		}
+
+		bool set_nonblocking(bool non_blocking) {
+			return set_socket_nonblocking(socket.fd, non_blocking);
 		}
 	};
 
@@ -198,20 +283,6 @@ u_int32_t	sin6_scope_id;	// Scope ID
 		char buf[INET6_ADDRSTRLEN];
 		inet_ntop(addr.ss_family, &addr, buf, sizeof(buf));
 		return std::string(buf);
-	}
-
-	bool set_socket_nonblocking(int fd, bool nonblocking) {
-		// https://stackoverflow.com/questions/1543466/how-do-i-change-a-tcp-socket-to-be-non-blocking
-		if(fd < 0) return false;
-		#ifdef _WIN32
-		unsigned long mode = blocking ? 0 : 1;
-		return (ioctlsocket(fd, FIONBIO, &mode) == 0);
-		#else
-		int flags = fcntl(fd, F_GETFL, 0);
-		if (flags == -1) return false;
-		flags = nonblocking ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
-		return (fcntl(fd, F_SETFL, flags) == 0);
-		#endif
 	}
 }
 

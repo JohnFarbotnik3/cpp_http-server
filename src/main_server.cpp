@@ -41,7 +41,7 @@ int main(const int argc, const char** argv) {
 	}
 
 	static_file_server_config config = static_file_server_config::from_config(config_sfs);
-	HTTP::Handlers::static_file_server::HTTPFileServer server("", portname.c_str(), config);
+	HTTP::Handlers::static_file_server::HTTPFileServer server("", portname.c_str(), 8, config);
 
 	if(args.named_arguments.contains("-config_tls")) {
 		const string path_config_tls = args.named_arguments.at("-config_tls");
