@@ -30,6 +30,7 @@ https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Messages
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <unistd.h>
 
 namespace HTTP {
 	using std::string;
@@ -38,16 +39,21 @@ namespace HTTP {
 	using TCP::TCPConnection;
 	namespace fs = std::filesystem;
 
+	struct work_queue_task {
+		int fd;
+		uint32_t events;
+	};
+
 	struct HTTPServer {
 		const string hostname;
 		const string portname;
 		SharedMap<int, HTTPConnection*> connections;
-		TaskQueue<int> work_queue;
+		TaskQueue<work_queue_task> work_queue;
 		std::vector<std::thread> worker_thread_pool;
 		std::thread accept_thread;
 		std::thread polling_thread;
 		int polling_fd;
-		int polling_timeout;
+		int polling_timeout_ms = 1000;
 		bool shutting_down;
 
 		HTTPServer(const string hostname, const string portname, const int n_worker_threads):
@@ -59,8 +65,6 @@ namespace HTTP {
 
 		// connection and socket functions.
 		void insert_connection_nonblocking(TCPConnection tcp_connection) {
-			// TODO - continue non-blocking fixes from here...
-			// make socket non-blocking.
 			bool success = tcp_connection.set_nonblocking(true);
 			if (!success) {
 				fprintf(stderr, "error: set_nonblocking() failed (err: %s)\n", strerror(errno));
@@ -70,68 +74,51 @@ namespace HTTP {
 
 			HTTPConnection* http_connection = new HTTPConnection(tcp_connection, MAX_HEAD_LENGTH, MAX_HEAD_LENGTH, 0);
 			const int fd = tcp_connection.socket.fd;
+			fprintf(stderr, "[insert_connection] new connection: fd=%i, ptr=%p\n", fd, http_connection);
 			connections.set(fd, http_connection);
 
 			// add to epoll group.
 			epoll_event ev;
 			ev.data.fd = fd;
-			ev.events = EPOLL_EVENTS::EPOLLONESHOT | EPOLL_EVENTS::EPOLLIN;
+			ev.events = EPOLL_EVENTS::EPOLLIN | EPOLL_EVENTS::EPOLLONESHOT;
 			int status = epoll_ctl(polling_fd, EPOLL_CTL_ADD, fd, &ev);
 			if(status == -1) fprintf(stderr, "[insert_connection] epoll_ctl: %s\n", strerror(errno));
 		}
-		void remove_connection(HTTPConnection* connection) {
-			const int fd = connection->fd();
-
-			// remove from epoll group.
-			epoll_event ev;
-			ev.data.fd = fd;
-			int status = epoll_ctl(polling_fd, EPOLL_CTL_DEL, fd, &ev);
-			if(status == -1) fprintf(stderr, "[remove_connection] epoll_ctl: %s\n", strerror(errno));
-
-			// close connection (if its still open).
+		void close_connection(HTTPConnection* connection, string prefix) {
+			fprintf(stdout, "[THREAD=%i] [close_connection] | (%s) state=%i, fd=%i\n", std::this_thread::get_id(), prefix.c_str(), connection->state, connection->fd());
 			connection->tcp_connection.close();
-
-			// free connection memory.
-			connections.remove(fd);
+			connections.remove(connection->fd());
 			delete connection;
 		}
-		void close_connection(HTTPConnection* connection) {
-			remove_connection(connection);
-		}
-		void re_arm_connection(int fd, EPOLL_EVENTS events) {
+		void re_arm_connection_oneshot(int fd, EPOLL_EVENTS events) {
 			// re-arm fd in epool group.
 			epoll_event ev;
 			ev.data.fd = fd;
-			ev.events = EPOLL_EVENTS::EPOLLONESHOT | events;
+			ev.events = events | EPOLL_EVENTS::EPOLLONESHOT;
 			int status = epoll_ctl(polling_fd, EPOLL_CTL_MOD, fd, &ev);
 			if(status == -1) fprintf(stderr, "[re_arm_connection] epoll_ctl: %s\n", strerror(errno));
 		}
-		void re_arm_connection_recv(HTTPConnection& connection, HTTP_CONNECTION_STATE new_state) {
-			connection.state = new_state;
-			re_arm_connection(connection.fd(), EPOLL_EVENTS::EPOLLIN);
+		void re_arm_connection_recv(HTTPConnection& connection) {
+			re_arm_connection_oneshot(connection.fd(), EPOLL_EVENTS::EPOLLIN);
 		}
-		void re_arm_connection_send(HTTPConnection& connection, HTTP_CONNECTION_STATE new_state) {
-			connection.state = new_state;
-			re_arm_connection(connection.fd(), EPOLL_EVENTS::EPOLLOUT);
+		void re_arm_connection_send(HTTPConnection& connection) {
+			re_arm_connection_oneshot(connection.fd(), EPOLL_EVENTS::EPOLLOUT);
 		}
 		int recv_until_block(HTTPConnection& connection, char* data, size_t& pos, const size_t size) {
 			time64_ns t0 = time64_ns::now();
+			size_t p0 = pos;
 			int status = connection.recv_all(data, pos, size);
+			connection.total_bytes_recv += pos - p0;
 			connection.dt_recv = connection.dt_recv + (time64_ns::now() - t0);
 			return status;
 		}
 		int send_until_block(HTTPConnection& connection, const char* data, size_t& pos, const size_t size) {
 			time64_ns t0 = time64_ns::now();
+			size_t p0 = pos;
 			int status = connection.send_all(data, pos, size);
+			connection.total_bytes_send += pos - p0;
 			connection.dt_send = connection.dt_send + (time64_ns::now() - t0);
 			return status;
-		}
-		void on_socket_close(HTTPConnection& connection) {
-			remove_connection(&connection);
-		}
-		void on_socket_error(HTTPConnection& connection) {
-			fprintf(stdout, "[worker_loop] socket error during send/recv.\n");
-			remove_connection(&connection);
 		}
 
 		// thread functions.
@@ -160,11 +147,13 @@ namespace HTTP {
 
 				/* Pop the client connection from the BIO chain */
 				BIO* client_bio = BIO_pop(acceptor_bio);
-				fprintf(stderr, "New client connection accepted\n");
+				int fd;// TODO TEST
+				BIO_get_fd(client_bio, &fd);// TODO TEST
+				fprintf(stderr, "New client connection accepted. fd=%i\n", fd);
 
-				accept_loop_TLS_handshake_func(server, ctx, client_bio);// TODO TEST
-				//std::thread handshake_thread(accept_loop_TLS_handshake_func, server, ctx, acceptor_bio);
-				//handshake_thread.detach();
+				//accept_loop_TLS_handshake_func(server, ctx, client_bio);
+				std::thread handshake_thread(accept_loop_TLS_handshake_func, server, ctx, client_bio);
+				handshake_thread.detach();
 			}
 		}
 		static void accept_loop_TLS_handshake_func(HTTPServer* server, SSL_CTX* ctx, BIO* client_bio) {
@@ -201,23 +190,24 @@ namespace HTTP {
 
 			while(true) {
 				if(server->shutting_down && server->connections.map.size() == 0) return;
-				std::array<epoll_event, 64> epoll_events;
-				int n_events = epoll_wait(server->polling_fd, epoll_events.data(), epoll_events.size(), server->polling_timeout);
+				std::array<epoll_event, 32> epoll_events;
+				int n_events = epoll_wait(server->polling_fd, epoll_events.data(), epoll_events.size(), server->polling_timeout_ms);
 				if(n_events == -1) fprintf(stderr, "[polling_loop] epoll_wait: %s\n", strerror(errno));
-				else for(int x=0;x<n_events;x++) {
-					const epoll_event& ev = epoll_events[x];
-					// TODO: this loop can be sped up by getting read/write locks once per batch,
-					// rather than once per event.
-					server->connections.get(ev.data.fd)->recent_epoll_events = ev.events;
-					server->work_queue.push(ev.data.fd);
-					//if(ev.events & (EPOLL_EVENTS::EPOLLIN | EPOLL_EVENTS::EPOLLOUT | EPOLL_EVENTS::EPOLLHUP | EPOLL_EVENTS::EPOLLERR)) {}
+				else {
+					std::array<work_queue_task, 32> tasks;
+					for(int x=0;x<n_events;x++) {
+						const epoll_event& ev = epoll_events[x];
+						tasks[x].fd = ev.data.fd;
+						tasks[x].events = ev.events;
+					}
+					server->work_queue.push_array(tasks.data(), n_events);
 				}
 			}
 
 			int status = close(server->polling_fd);
 			if(status == -1) fprintf(stderr, "[polling_loop] close: %s\n", strerror(errno));
 		}
-		void worker_func_cycle_start(HTTPConnection& connection) {
+		HTTP_CONNECTION_STATE worker_func_cycle_start(HTTPConnection& connection) {
 			connection.head_scan_cursor = 0;
 			connection.send_head_cursor = 0;
 			connection.send_body_cursor = 0;
@@ -226,11 +216,11 @@ namespace HTTP {
 			connection.dt_send = 0;
 			return worker_func_recv_head(connection);
 		}
-		void worker_func_recv_head(HTTPConnection& connection) {
+		HTTP_CONNECTION_STATE worker_func_recv_head(HTTPConnection& connection) {
 			const size_t HE_LEN = HTTP_HEADER_END.length();
 			MessageBuffer& recvbuf = connection.recv_buffer;
 
-			// check if there is already a completed head in buffer.
+			// search for end of HEAD section.
 			size_t end_pos = string::npos;
 			if(recvbuf.length > HE_LEN) {
 				end_pos = recvbuf.view().find(HTTP_HEADER_END, connection.head_scan_cursor);
@@ -241,25 +231,24 @@ namespace HTTP {
 			if(end_pos == string::npos) {
 				recvbuf.reserve(MAX_HEAD_LENGTH);
 				int success = recv_until_block(connection, recvbuf.data, recvbuf.length, MAX_HEAD_LENGTH);
-				if(success == 0) return on_socket_close(connection);
-				if(success <  0) return on_socket_error(connection);
+				if(success == 0) return SOCKET_CLOSE;
+				if(success <  0) return SOCKET_ERROR;
 
-				// try to find end of head again.
+				// search for end of HEAD section.
 				if(recvbuf.length > HE_LEN) {
 					end_pos = recvbuf.view().find(HTTP_HEADER_END, connection.head_scan_cursor);
 					connection.head_scan_cursor = recvbuf.length - HE_LEN;
 				}
+			}
 
-				// check (and return early) if head was still not found.
-				if(end_pos == string::npos) {
-					// check if head is too long.
-					if(recvbuf.length >= MAX_HEAD_LENGTH) {
-						// TODO - check if URI is too long first to give more specific status-code.
-						return worker_func_init_soft_error(connection, 431);// header fields too long.
-					} else {
-						// wait for more data.
-						return re_arm_connection_recv(connection, WAITING_FOR_HEAD);
-					}
+			// check (and return early) if head was not found.
+			if(end_pos == string::npos) {
+				// check if head is too long.
+				if(recvbuf.length >= MAX_HEAD_LENGTH) {
+					// TODO - check if URI is too long first to give more specific status-code.
+					return worker_func_init_soft_error(connection, 431);// header fields too long.
+				} else {
+					return WAITING_FOR_HEAD;
 				}
 			}
 
@@ -282,7 +271,7 @@ namespace HTTP {
 			if(body_length > 0)	return worker_func_recv_body(connection);
 			else				return worker_func_handle_request(connection);
 		}
-		void worker_func_recv_body(HTTPConnection& connection) {
+		HTTP_CONNECTION_STATE worker_func_recv_body(HTTPConnection& connection) {
 			MessageBuffer& recvbuf = connection.recv_buffer;
 
 			const size_t head_length = connection.request.head.length();
@@ -291,17 +280,18 @@ namespace HTTP {
 			if(recvbuf.length < total_length) {
 				recvbuf.reserve(total_length);
 				int success = recv_until_block(connection, recvbuf.data, recvbuf.length, total_length);
-				if(success == 0) return on_socket_close(connection);
-				if(success <  0) return on_socket_error(connection);
+				if(success == 0) return SOCKET_CLOSE;
+				if(success <  0) return SOCKET_ERROR;
 			}
 
 			if(recvbuf.length >= total_length) {
 				connection.buf_shift_length = total_length;
 				return worker_func_handle_request(connection);
+			} else {
+				return WAITING_FOR_BODY;
 			}
-			else return re_arm_connection_recv(connection, WAITING_FOR_BODY);
 		}
-		void worker_func_handle_request(HTTPConnection& connection) {
+		HTTP_CONNECTION_STATE worker_func_handle_request(HTTPConnection& connection) {
 			time64_ns t0 = time64_ns::now();
 			handle_request(connection, connection.request, connection.response, connection.body_buffer);
 			connection.dt_work = connection.dt_work + (time64_ns::now() - t0);
@@ -326,7 +316,7 @@ namespace HTTP {
 				connection.send_body_cursor += copy_length;
 			}
 
-			worker_func_send_head(connection);
+			return worker_func_send_head(connection);
 		}
 		virtual void handle_request(const HTTPConnection& connection, const http_request& request, http_response& response, MessageBuffer& body_buffer) {
 			string data = "test abc 123 :)";
@@ -339,31 +329,31 @@ namespace HTTP {
 			response.headers[HEADERS::content_length] = int_to_string(data.length());
 			body_buffer.append(data);
 		}
-		void worker_func_send_head(HTTPConnection& connection) {
+		HTTP_CONNECTION_STATE worker_func_send_head(HTTPConnection& connection) {
 			MessageBuffer& buffer = connection.head_buffer;
 			size_t& cursor = connection.send_head_cursor;
 			if(buffer.length == 0) return worker_func_send_body(connection);
 
 			int success = send_until_block(connection, buffer.data, cursor, buffer.length);
-			if(success == 0) return on_socket_close(connection);
-			if(success <  0) return on_socket_error(connection);
+			if(success == 0) return SOCKET_CLOSE;
+			if(success <  0) return SOCKET_ERROR;
 
 			if(cursor == buffer.length) return worker_func_send_body(connection);
-			else re_arm_connection_send(connection, WAITING_TO_SEND_HEAD);
+			else return WAITING_TO_SEND_HEAD;
 		}
-		void worker_func_send_body(HTTPConnection& connection) {
+		HTTP_CONNECTION_STATE worker_func_send_body(HTTPConnection& connection) {
 			MessageBuffer& buffer = connection.body_buffer;
 			size_t& cursor = connection.send_body_cursor;
 			if(buffer.length == 0) return worker_func_cycle_end(connection);
 
 			int success = send_until_block(connection, buffer.data, cursor, buffer.length);
-			if(success == 0) return on_socket_close(connection);
-			if(success <  0) return on_socket_error(connection);
+			if(success == 0) return SOCKET_CLOSE;
+			if(success <  0) return SOCKET_ERROR;
 
 			if(cursor == buffer.length) return worker_func_cycle_end(connection);
-			else re_arm_connection_send(connection, WAITING_TO_SEND_BODY);
+			else return WAITING_TO_SEND_BODY;
 		}
-		void worker_func_init_soft_error(HTTPConnection& connection, const int status_code) {
+		HTTP_CONNECTION_STATE worker_func_init_soft_error(HTTPConnection& connection, const int status_code) {
 			// set shift-length to clear recv_buffer.
 			connection.buf_shift_length = connection.recv_buffer.length;
 
@@ -377,18 +367,18 @@ namespace HTTP {
 			connection.send_head_cursor = 0;
 			return worker_func_send_soft_error(connection);
 		}
-		void worker_func_send_soft_error(HTTPConnection& connection) {
+		HTTP_CONNECTION_STATE worker_func_send_soft_error(HTTPConnection& connection) {
 			MessageBuffer& buffer = connection.head_buffer;
 			size_t& cursor = connection.send_head_cursor;
 
 			int success = send_until_block(connection, buffer.data, cursor, buffer.length);
-			if(success == 0) return on_socket_close(connection);
-			if(success <  0) return on_socket_error(connection);
+			if(success == 0) return SOCKET_CLOSE;
+			if(success <  0) return SOCKET_ERROR;
 
-			if(cursor == buffer.length) close_connection(&connection);
-			else re_arm_connection_send(connection, SOFT_ERROR);
+			if(cursor == buffer.length) return SOCKET_CLOSE;// TODO - re-evaluate later if this is the correct next-state to return.
+			else return WAITING_TO_SEND_SOFT_ERROR;
 		}
-		void worker_func_send_hard_error(HTTPConnection& connection) {
+		HTTP_CONNECTION_STATE worker_func_send_hard_error(HTTPConnection& connection) {
 			MessageBuffer& buffer = connection.head_buffer;
 			size_t cursor = 0;
 
@@ -400,13 +390,13 @@ namespace HTTP {
 			append_head(buffer, response);
 
 			int success = send_until_block(connection, buffer.data, cursor, buffer.length);
-			if(success == 0) return on_socket_close(connection);
-			if(success <  0) return on_socket_error(connection);
+			if(success == 0) return SOCKET_CLOSE;
+			if(success <  0) return SOCKET_ERROR;
 
 			if(cursor != buffer.length) fprintf(stderr, "failed to send full hard error message.\n");
-			close_connection(&connection);
+			return SOCKET_CLOSE;
 		}
-		void worker_func_cycle_end(HTTPConnection& connection) {
+		HTTP_CONNECTION_STATE worker_func_cycle_end(HTTPConnection& connection) {
 			// push log entry.
 			http_request& request = connection.request;
 			http_response& response = connection.response;
@@ -426,6 +416,7 @@ namespace HTTP {
 				connection.dt_work.value_us(),
 				connection.dt_send.value_us()
 			);
+
 			// cleanup buffers.
 			MessageBuffer& recv_buffer = connection.recv_buffer;
 			MessageBuffer& head_buffer = connection.head_buffer;
@@ -435,38 +426,53 @@ namespace HTTP {
 			body_buffer.clear();
 			if(recv_buffer.capacity > BUFFER_SHRINK_CAPACITY) recv_buffer.set_capacity(std::max(recv_buffer.length, BUFFER_SHRINK_CAPACITY));
 			if(body_buffer.capacity > BUFFER_SHRINK_CAPACITY) body_buffer.set_capacity(BUFFER_SHRINK_CAPACITY);
-			// set next state.
-			connection.state = START_OF_CYCLE;
+
+			return START_OF_CYCLE;
 		}
 		void worker_func() {
-			HTTPConnection* connection_ptr = connections.get(work_queue.pop());
-			HTTPConnection& connection = *connection_ptr;
-			const uint32_t events = connection.recent_epoll_events;
-			const int conn_fd = connection.tcp_connection.socket.fd;
 			try {
+				work_queue_task task = work_queue.pop();
+				HTTPConnection* connection_ptr = connections.get(task.fd);
+				HTTPConnection& connection = *connection_ptr;
+
+				const uint32_t events = task.events;
 				if(events & EPOLL_EVENTS::EPOLLHUP) {
-					fprintf(stdout, "[worker_loop] connection closed. fd=%i\n", conn_fd);
-					remove_connection(connection_ptr);
-					return;
+					return close_connection(&connection, "wf-cl-hup");
 				}
 				if(events & EPOLL_EVENTS::EPOLLERR) {
-					fprintf(stderr, "[worker_loop] connection error occurred. fd=%i\n", conn_fd);
-					remove_connection(connection_ptr);
+					return close_connection(&connection, "wf-cl-err");
+				}
+				if(events & (EPOLLIN | EPOLLOUT)) {
+					HTTP_CONNECTION_STATE& state = connection.state;
+					do {
+						switch(state) {
+							case START_OF_CYCLE: { state = worker_func_cycle_start(connection); break; }
+							case WAITING_FOR_HEAD: { state = worker_func_recv_head(connection); break; }
+							case WAITING_FOR_BODY: { state = worker_func_recv_body(connection); break; }
+							case WAITING_TO_SEND_HEAD: { state = worker_func_send_head(connection); break; }
+							case WAITING_TO_SEND_BODY: { state = worker_func_send_body(connection); break; }
+							case WAITING_TO_SEND_SOFT_ERROR: { state = worker_func_send_soft_error(connection); break; }
+							case SOCKET_CLOSE: return close_connection(connection_ptr, "wf-cl-sclose");
+							case SOCKET_ERROR: return close_connection(connection_ptr, "wf-cl-serror");
+						}
+						if(state == WAITING_FOR_HEAD | state == WAITING_FOR_BODY) {
+							re_arm_connection_oneshot(connection.fd(), EPOLLIN);
+							break;
+						}
+						if(state == WAITING_TO_SEND_HEAD | state == WAITING_TO_SEND_BODY | state == WAITING_TO_SEND_SOFT_ERROR) {
+							re_arm_connection_oneshot(connection.fd(), EPOLLOUT);
+							break;
+						}
+					} while(state == START_OF_CYCLE);
 					return;
 				}
-
-				HTTP_CONNECTION_STATE& state = connection.state;
-				//if(state == START_OF_CYCLE) worker_func_cycle_start(connection);
-				if(state == WAITING_FOR_HEAD) worker_func_recv_head(connection);
-				if(state == WAITING_FOR_BODY) worker_func_recv_body(connection);
-				if(state == WAITING_TO_SEND_HEAD) worker_func_send_head(connection);
-				if(state == WAITING_TO_SEND_BODY) worker_func_send_body(connection);
-				if(state == SOFT_ERROR) worker_func_send_soft_error(connection);
-				while(state == START_OF_CYCLE) worker_func_cycle_start(connection);
+				fprintf(stderr, "[THREAD=%i] [worker_loop] task.fd=%i, conn_ptr=%p, UNKNOWN EPOLL EVENT.\n", std::this_thread::get_id(), task.fd, connection_ptr);
+				exit(1);
 			} catch (const std::exception& e) {
 				fprintf(stderr, "%s\n", e.what());
 				try {
-					worker_func_send_hard_error(connection);
+					// TODO
+					//worker_func_send_hard_error(connection);
 				} catch (const std::exception& e) {
 					fprintf(stderr, "%s\n", e.what());
 				}

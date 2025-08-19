@@ -11,15 +11,23 @@ struct TaskQueue {
 
 	void push(T value) {
 		{
-			std::lock_guard lock(mutex);
+			std::unique_lock lock(mutex);
 			queue.push(value);
 		}
 		semaphore.release();
 	}
 
+	void push_array(const T* data, int size) {
+		{
+			std::unique_lock lock(mutex);
+			for(int x=0;x<size;x++) queue.push(data[x]);
+		}
+		semaphore.release(size);
+	}
+
 	T pop() {
 		semaphore.acquire();
-		std::lock_guard lock(mutex);
+		std::unique_lock lock(mutex);
 		T value = queue.front();
 		queue.pop();
 		return value;

@@ -93,23 +93,28 @@ namespace HTTP {
 		// send until body is sent, or socket blocks.
 		WAITING_TO_SEND_BODY,
 		// a soft error occurred during cycle - try to send error response.
-		SOFT_ERROR,
+		WAITING_TO_SEND_SOFT_ERROR,
+		// socket closed during send/recv.
+		SOCKET_CLOSE,
+		// socket errored during send/recv.
+		SOCKET_ERROR,
 	};
 	struct HTTPConnection {
 		TCP::TCPConnection tcp_connection;
-		uint32_t recent_epoll_events;
-		HTTP_CONNECTION_STATE state = START_OF_CYCLE;
 
+		HTTP_CONNECTION_STATE state = START_OF_CYCLE;
 		MessageBuffer recv_buffer;
 		MessageBuffer head_buffer;
 		MessageBuffer body_buffer;
-		size_t head_scan_cursor;// scan start-position when searching for end of message-head.
-		size_t buf_shift_length;// amount to shift recv_buffer by at end of cycle.
-		size_t send_head_cursor;// amount of head data sent.
-		size_t send_body_cursor;// amount of body data sent.
+		size_t head_scan_cursor = 0;// scan start-position when searching for end of message-head.
+		size_t buf_shift_length = 0;// amount to shift recv_buffer by at end of cycle.
+		size_t send_head_cursor = 0;// amount of head data sent.
+		size_t send_body_cursor = 0;// amount of body data sent.
 		http_request  request;
 		http_response response;
 
+		size_t total_bytes_send = 0;
+		size_t total_bytes_recv = 0;
 		time64_ns date_created = time64_ns::now();
 		time64_ns dt_recv;
 		time64_ns dt_work;
