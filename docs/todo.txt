@@ -84,27 +84,11 @@ timestamp that is greater than "keep-alive" duration.
 * sockfd can be used as index in list.
 
 
-> better threading architecture (outdated):
->> see "THREADING_MODEL.txt"
-- use non-blocking send, and maybe non-blocking recv (depending on architecture).
-- have N threads (ex: 8) which are responsible for all the connections (ex: 100K),
-and block until at least one connection has data to recv.
-* connection-list should be an array of pointers, where fd is used for indexing,
-so that array elements can be re-arranged without moving memory that worker threads are currently operating on.
-	^ when connection closes, connection can be freed and array-element can be set to nullptr.
-	^ if array is sparse, than a map will probably outperform it. (TODO: learn how socket fd's are allocated.)
-- when there is data to recv, then collect the data and update state of connection
-(ex: waiting to recv head, body, or send response).
-- this means that only a small number of threads are interacting with shared data structures
-instead of 1K-1M threads.
-- only 1 thread should be interacting with a particular connection at a time!
-- housekeeping and abuse prevention should be easier with this architecture.
-* "request queue": a list of connection-pointers which have a request
-	and are waiting to be processed, i.e. have their response populated.
-	(worker threads can sleep if queue is empty)
-* "response queue": a list of connection-pointers which have been processed,
-	i.e. responses that are ready to be sent by server.
-...
+> fix SEVERE multithreading bug where sometimes server would randomly switch
+from operating normally to maxing out all CPU cores (what is it doing?).
+- this bug was spotted when running in HTTP mode (no TLS),
+but I have not seen it happen in HTTPS mode (yet).
+
 
 
 
