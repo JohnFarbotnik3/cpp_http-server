@@ -7,6 +7,7 @@ https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Messages
 #ifndef F_SERVER_HTTP
 #define F_SERVER_HTTP
 
+#include <csignal>
 #include <cstdio>
 #include <cstring>
 #include <netdb.h>
@@ -61,7 +62,13 @@ namespace HTTP {
 			portname(portname),
 			worker_thread_pool(n_worker_threads),
 			shutting_down(false)
-		{}
+		{
+			// instead of crashing on send to socket closed by peer, just emit EPIPE error on send.
+			// https://stackoverflow.com/questions/6162994/send-crashes-my-program
+			// why isnt this the default?
+			// why on earth is crashing the default!?
+			signal(SIGPIPE, SIG_IGN);
+		}
 
 		// connection and socket functions.
 		void insert_connection_nonblocking(TCPConnection tcp_connection) {
@@ -85,7 +92,7 @@ namespace HTTP {
 			if(status == -1) fprintf(stderr, "[insert_connection] epoll_ctl: %s\n", strerror(errno));
 		}
 		void close_connection(HTTPConnection* connection, string prefix) {
-			fprintf(stdout, "[THREAD=%i] [close_connection] | (%s) state=%i, fd=%i\n", std::this_thread::get_id(), prefix.c_str(), connection->state, connection->fd());
+			fprintf(stdout, "[THREAD=%u] [close_connection] | (%s) state=%i, fd=%i\n", std::this_thread::get_id(), prefix.c_str(), connection->state, connection->fd());
 			connection->tcp_connection.close();
 			connections.remove(connection->fd());
 			delete connection;
@@ -208,7 +215,6 @@ namespace HTTP {
 			if(status == -1) fprintf(stderr, "[polling_loop] close: %s\n", strerror(errno));
 		}
 		HTTP_CONNECTION_STATE worker_func_cycle_start(HTTPConnection& connection) {
-			//printf("[THREAD=%i] worker_func_cycle_start()\n", std::this_thread::get_id());
 			connection.head_scan_cursor = 0;
 			connection.send_head_cursor = 0;
 			connection.send_body_cursor = 0;
@@ -218,7 +224,6 @@ namespace HTTP {
 			return worker_func_recv_head(connection);
 		}
 		HTTP_CONNECTION_STATE worker_func_recv_head(HTTPConnection& connection) {
-			printf("[THREAD=%u] worker_func_recv_head()\n", std::this_thread::get_id());
 			const size_t HE_LEN = HTTP_HEADER_END.length();
 			MessageBuffer& recvbuf = connection.recv_buffer;
 
@@ -228,14 +233,12 @@ namespace HTTP {
 				end_pos = recvbuf.view().find(HTTP_HEADER_END, connection.head_scan_cursor);
 				connection.head_scan_cursor = recvbuf.length - HE_LEN;
 			}
-			printf("[THREAD=%u] 1 end_pos=%lu\n", std::this_thread::get_id(), end_pos);
 
 			// if not found, recv data until MAX_HEAD_LENGTH or EWOULDBLOCK.
 			if(end_pos == string::npos) {
 				recvbuf.reserve(MAX_HEAD_LENGTH);
 				size_t p0 = recvbuf.length;
 				int success = recv_until_block(connection, recvbuf.data, p0, MAX_HEAD_LENGTH);
-				printf("[THREAD=%u] success=%i, n_read=%lu, errno=%s\n", std::this_thread::get_id(), success, p0-recvbuf.length, strerror(errno));
 				recvbuf.length = p0;
 				if(success == 0) return SOCKET_CLOSE;
 				if(success <  0) return SOCKET_ERROR;
@@ -245,7 +248,6 @@ namespace HTTP {
 					end_pos = recvbuf.view().find(HTTP_HEADER_END, connection.head_scan_cursor);
 					connection.head_scan_cursor = recvbuf.length - HE_LEN;
 				}
-				printf("[THREAD=%u] 2 end_pos=%lu\n", std::this_thread::get_id(), end_pos);
 			}
 
 			// check (and return early) if head was not found.
@@ -255,7 +257,6 @@ namespace HTTP {
 					// TODO - check if URI is too long first to give more specific status-code.
 					return worker_func_init_soft_error(connection, 431);// header fields too long.
 				} else {
-					printf("[THREAD=%u] return WAITING_FOR_HEAD\n", std::this_thread::get_id());
 					return WAITING_FOR_HEAD;
 				}
 			}
@@ -280,7 +281,6 @@ namespace HTTP {
 			else				return worker_func_handle_request(connection);
 		}
 		HTTP_CONNECTION_STATE worker_func_recv_body(HTTPConnection& connection) {
-			printf("[THREAD=%i] worker_func_recv_body()\n", std::this_thread::get_id());
 			MessageBuffer& recvbuf = connection.recv_buffer;
 
 			const size_t head_length = connection.request.head.length();
@@ -301,7 +301,6 @@ namespace HTTP {
 			}
 		}
 		HTTP_CONNECTION_STATE worker_func_handle_request(HTTPConnection& connection) {
-			printf("[THREAD=%i] worker_func_handle_request()\n", std::this_thread::get_id());
 			time64_ns t0 = time64_ns::now();
 			handle_request(connection, connection.request, connection.response, connection.body_buffer);
 			connection.dt_work = connection.dt_work + (time64_ns::now() - t0);
@@ -340,7 +339,6 @@ namespace HTTP {
 			body_buffer.append(data);
 		}
 		HTTP_CONNECTION_STATE worker_func_send_head(HTTPConnection& connection) {
-			//printf("[THREAD=%i] worker_func_send_head()\n", std::this_thread::get_id());
 			MessageBuffer& buffer = connection.head_buffer;
 			size_t& cursor = connection.send_head_cursor;
 			if(buffer.length == 0) return worker_func_send_body(connection);
@@ -353,7 +351,6 @@ namespace HTTP {
 			else return WAITING_TO_SEND_HEAD;
 		}
 		HTTP_CONNECTION_STATE worker_func_send_body(HTTPConnection& connection) {
-			//printf("[THREAD=%i] worker_func_send_body()\n", std::this_thread::get_id());
 			MessageBuffer& buffer = connection.body_buffer;
 			size_t& cursor = connection.send_body_cursor;
 			if(buffer.length == 0) return worker_func_cycle_end(connection);
@@ -366,7 +363,6 @@ namespace HTTP {
 			else return WAITING_TO_SEND_BODY;
 		}
 		HTTP_CONNECTION_STATE worker_func_init_soft_error(HTTPConnection& connection, const int status_code) {
-			//printf("[THREAD=%i] worker_func_init_soft_error()\n", std::this_thread::get_id());
 			// set shift-length to clear recv_buffer.
 			connection.buf_shift_length = connection.recv_buffer.length;
 
@@ -381,7 +377,6 @@ namespace HTTP {
 			return worker_func_send_soft_error(connection);
 		}
 		HTTP_CONNECTION_STATE worker_func_send_soft_error(HTTPConnection& connection) {
-			//printf("[THREAD=%i] worker_func_send_soft_error()\n", std::this_thread::get_id());
 			MessageBuffer& buffer = connection.head_buffer;
 			size_t& cursor = connection.send_head_cursor;
 
@@ -393,7 +388,6 @@ namespace HTTP {
 			else return WAITING_TO_SEND_SOFT_ERROR;
 		}
 		HTTP_CONNECTION_STATE worker_func_send_hard_error(HTTPConnection& connection) {
-			//printf("[THREAD=%i] worker_func_send_hard_error()\n", std::this_thread::get_id());
 			MessageBuffer& buffer = connection.head_buffer;
 			size_t cursor = 0;
 
@@ -412,7 +406,6 @@ namespace HTTP {
 			return SOCKET_CLOSE;
 		}
 		HTTP_CONNECTION_STATE worker_func_cycle_end(HTTPConnection& connection) {
-			//printf("[THREAD=%i] worker_func_cycle_end()\n", std::this_thread::get_id());
 			// push log entry.
 			http_request& request = connection.request;
 			http_response& response = connection.response;
@@ -459,10 +452,6 @@ namespace HTTP {
 					return close_connection(&connection, "wf-cl-err");
 				}
 				if(events & (EPOLLIN | EPOLLOUT)) {
-					connection.copies_in_flight++;
-					if(events & EPOLLIN) printf("[THREAD=%u] EPOLLIN, events=%u\n", std::this_thread::get_id(), events);
-					if(events & EPOLLOUT) printf("[THREAD=%u] EPOLLOUT, events=%u\n", std::this_thread::get_id(), events);
-					if(events & EPOLLIN) printf("[THREAD=%u] copies_in_flight=%i\n", std::this_thread::get_id(), connection.copies_in_flight);
 					HTTP_CONNECTION_STATE& state = connection.state;
 					do {
 						switch(state) {
@@ -476,19 +465,17 @@ namespace HTTP {
 							case SOCKET_ERROR: { return close_connection(connection_ptr, "wf-cl-serror"); }
 						}
 						if(state == WAITING_FOR_HEAD | state == WAITING_FOR_BODY) {
-							connection.copies_in_flight--;
 							re_arm_connection_oneshot(connection.fd(), EPOLLIN);
 							break;
 						}
 						if(state == WAITING_TO_SEND_HEAD | state == WAITING_TO_SEND_BODY | state == WAITING_TO_SEND_SOFT_ERROR) {
-							connection.copies_in_flight--;
 							re_arm_connection_oneshot(connection.fd(), EPOLLOUT);
 							break;
 						}
 					} while(state == START_OF_CYCLE);
 					return;
 				}
-				fprintf(stderr, "[THREAD=%i] [worker_loop] task.fd=%i, conn_ptr=%p, UNKNOWN EPOLL EVENT.\n", std::this_thread::get_id(), task.fd, connection_ptr);
+				fprintf(stderr, "[THREAD=%u] [worker_loop] task.fd=%i, conn_ptr=%p, UNKNOWN EPOLL EVENT.\n", std::this_thread::get_id(), task.fd, connection_ptr);
 				exit(1);
 			} catch (const std::exception& e) {
 				fprintf(stderr, "%s\n", e.what());

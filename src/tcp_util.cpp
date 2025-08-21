@@ -2,6 +2,7 @@
 #ifndef F_tcp_util_cpp
 #define F_tcp_util_cpp
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -72,16 +73,24 @@ u_int32_t	sin6_scope_id;	// Scope ID
 		return (fcntl(fd, F_SETFL, flags) == 0);
 		#endif
 	}
-	int get_ssl_error_status(SSL* ssl, int ret_code) {
-		switch (SSL_get_error(ssl, ret_code)) {
+	int get_ssl_error_status(SSL* ssl, int ret_len) {
+		// https://docs.openssl.org/3.3/man3/SSL_read/#return-values
+		// https://docs.openssl.org/3.3/man3/SSL_get_error/#name
+		if(ret_len > 0) return 1;// success.
+		const int ec = SSL_get_error(ssl, ret_len);
+		switch (ec) {
 			case SSL_ERROR_WANT_READ: return 1;// would block on read.
 			case SSL_ERROR_WANT_WRITE: return 1;// would block on write.
 			case SSL_ERROR_ZERO_RETURN: return 0;// no more data to read (but write may still be possible).
-			case SSL_ERROR_SYSCALL: return -1;
+			case SSL_ERROR_SYSCALL:
+				//fprintf(stderr, "SSL_ERROR_SYSCALL, errno=%s\n", strerror(errno));
+				return (errno == 0 | errno == EWOULDBLOCK) ? 1 : -1;
 			case SSL_ERROR_SSL:// SSL related error happened.
 				if (SSL_get_verify_result(ssl) != X509_V_OK) printf("Verify error: %s\n", X509_verify_cert_error_string(SSL_get_verify_result(ssl)));
 				return -1;
-			default: return -1;
+			default:
+				//fprintf(stderr, "SSL unknown error code: ec=%i, errno=%s\n", ec, strerror(errno));
+				return -1;
 		}
 	}
 
@@ -116,9 +125,7 @@ u_int32_t	sin6_scope_id;	// Scope ID
 					int len = SSL_write(ssl, data+pos, size-pos);
 					if(len > 0) pos += len; else break;
 				}
-				if((len == -1 & errno == EWOULDBLOCK) | (pos == size)) return 1;// success or blocked.
-				if(len == 0) return 0;// socket closed.
-				return -1;// error.
+				return get_ssl_error_status(ssl, len);
 			}
 		}
 		int recv_all(char* data, size_t& pos, const size_t size) {
@@ -137,9 +144,7 @@ u_int32_t	sin6_scope_id;	// Scope ID
 					int len = SSL_read(ssl, data+pos, size-pos);
 					if(len > 0) pos += len; else break;
 				}
-				if((len == -1 & errno == EWOULDBLOCK) | (pos == size)) return 1;// success or blocked.
-				if(len == 0) return 0;// socket closed.
-				return -1;// error.
+				return get_ssl_error_status(ssl, len);
 			}
 		}
 

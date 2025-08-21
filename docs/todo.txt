@@ -84,10 +84,7 @@ timestamp that is greater than "keep-alive" duration.
 * sockfd can be used as index in list.
 
 
-> fix SEVERE bug where server just exits without even printing an error message.
-- discovered in HTTP mode, but probably applies to HTTPS as well.
-
-
+> bug: investigate possible connection/fd leakage.
 
 
 
