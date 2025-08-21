@@ -119,6 +119,7 @@ namespace HTTP {
 		time64_ns dt_recv;
 		time64_ns dt_work;
 		time64_ns dt_send;
+		int copies_in_flight = 0;// TODO TEST
 
 
 		HTTPConnection(TCP::TCPConnection tcp_connection, size_t rbuf_size, size_t hbuf_size, size_t bbuf_size) :

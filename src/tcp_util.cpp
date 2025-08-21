@@ -107,7 +107,7 @@ u_int32_t	sin6_scope_id;	// Scope ID
 					len = ::send(socket.fd, data+pos, size-pos, 0);
 					if(len > 0) pos += len; else break;
 				}
-				if(pos == size || errno == EWOULDBLOCK) return 1;// success or blocked.
+				if((len == -1 & errno == EWOULDBLOCK) | (pos == size)) return 1;// success or blocked.
 				if(len == 0) return 0;// socket closed.
 				return -1;// error.
 			} else {
@@ -116,7 +116,7 @@ u_int32_t	sin6_scope_id;	// Scope ID
 					int len = SSL_write(ssl, data+pos, size-pos);
 					if(len > 0) pos += len; else break;
 				}
-				if(pos == size || errno == EWOULDBLOCK) return 1;// success or blocked.
+				if((len == -1 & errno == EWOULDBLOCK) | (pos == size)) return 1;// success or blocked.
 				if(len == 0) return 0;// socket closed.
 				return -1;// error.
 			}
@@ -128,7 +128,7 @@ u_int32_t	sin6_scope_id;	// Scope ID
 					len = ::recv(socket.fd, data+pos, size-pos, 0);
 					if(len > 0) pos += len; else break;
 				}
-				if(pos == size || errno == EWOULDBLOCK) return 1;// success or blocked.
+				if((len == -1 & errno == EWOULDBLOCK) | (pos == size)) return 1;// success or blocked.
 				if(len == 0) return 0;// socket closed.
 				return -1;// error.
 			} else {
@@ -137,7 +137,7 @@ u_int32_t	sin6_scope_id;	// Scope ID
 					int len = SSL_read(ssl, data+pos, size-pos);
 					if(len > 0) pos += len; else break;
 				}
-				if(pos == size || errno == EWOULDBLOCK) return 1;// success or blocked.
+				if((len == -1 & errno == EWOULDBLOCK) | (pos == size)) return 1;// success or blocked.
 				if(len == 0) return 0;// socket closed.
 				return -1;// error.
 			}

@@ -27,4 +27,12 @@ struct SharedMap {
 		std::unique_lock<std::shared_mutex> lock(mutex);
 		map.erase(key);
 	}
+
+	std::shared_lock<std::shared_mutex> read_lock() {
+		return std::shared_lock<std::shared_mutex>(mutex);
+	}
+
+	std::unique_lock<std::shared_mutex> write_lock() {
+		return std::unique_lock<std::shared_mutex>(mutex);
+	}
 };

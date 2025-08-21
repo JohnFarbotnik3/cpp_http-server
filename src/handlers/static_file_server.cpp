@@ -10,14 +10,13 @@
 #include "src/utils/config_util.cpp"
 #include "src/http_util.cpp"
 
-// TODO - review for thread safety.
 /*
 https://man7.org/linux/man-pages/man2/pwrite.2.html
-NOTE: pread/pwrite allows multiple threads to use the same file-descriptor
-
 https://man7.org/linux/man-pages/man2/read.2.html
 https://man7.org/linux/man-pages/man2/open.2.html
 https://man7.org/linux/man-pages/man2/close.2.html
+NOTE: pread/pwrite allows multiple threads to use the same file-descriptor
+
 https://stackoverflow.com/questions/73601293/thread-safe-file-updates
 */
 namespace HTTP::Handlers::static_file_server {
@@ -45,7 +44,6 @@ namespace HTTP::Handlers::static_file_server {
 	struct static_file_server_struct {
 		static_file_server_config config;
 		fs::path prefix_canonical;
-		SharedMap<string, std::shared_mutex> file_access_map;
 
 		static_file_server_struct(static_file_server_config config) {
 			this->config = config;

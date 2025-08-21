@@ -84,13 +84,8 @@ timestamp that is greater than "keep-alive" duration.
 * sockfd can be used as index in list.
 
 
-> fix SEVERE multithreading bug where sometimes server would randomly switch
-from operating normally to maxing out all CPU cores (what is it doing?).
-- this bug was spotted when running in HTTP mode (no TLS),
-but I have not seen it happen in HTTPS mode (yet).
-
-
-
+> fix SEVERE bug where server just exits without even printing an error message.
+- discovered in HTTP mode, but probably applies to HTTPS as well.
 
 
 
