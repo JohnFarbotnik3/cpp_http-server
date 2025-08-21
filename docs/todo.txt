@@ -84,6 +84,10 @@ timestamp that is greater than "keep-alive" duration.
 * sockfd can be used as index in list.
 
 
+> TODO: learn about linux "strace".
+ex: strace -f -o strace.out ./server
+
+
 > bug: investigate possible connection/fd leakage.
 
 
