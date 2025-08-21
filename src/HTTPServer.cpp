@@ -81,7 +81,7 @@ namespace HTTP {
 
 			HTTPConnection* http_connection = new HTTPConnection(tcp_connection, MAX_HEAD_LENGTH, MAX_HEAD_LENGTH, 0);
 			const int fd = tcp_connection.socket.fd;
-			fprintf(stderr, "[insert_connection] new connection: fd=%i, ptr=%p\n", fd, http_connection);
+			fprintf(stderr, "[insert_connection] new connection: fd=%i, ip=%s\n", fd, TCP::get_address_string(tcp_connection.socket.addr).c_str());
 			connections.set(fd, http_connection);
 
 			// add to epoll group.
@@ -98,7 +98,7 @@ namespace HTTP {
 			delete connection;
 		}
 		void re_arm_connection_oneshot(int fd, EPOLL_EVENTS events) {
-			// re-arm fd in epool group.
+			// re-arm fd in epoll group.
 			epoll_event ev;
 			ev.data.fd = fd;
 			ev.events = events | EPOLL_EVENTS::EPOLLONESHOT;
@@ -154,9 +154,6 @@ namespace HTTP {
 
 				/* Pop the client connection from the BIO chain */
 				BIO* client_bio = BIO_pop(acceptor_bio);
-				int fd;// TODO TEST
-				BIO_get_fd(client_bio, &fd);// TODO TEST
-				fprintf(stderr, "New client connection accepted. fd=%i\n", fd);
 
 				//accept_loop_TLS_handshake_func(server, ctx, client_bio);
 				std::thread handshake_thread(accept_loop_TLS_handshake_func, server, ctx, client_bio);
